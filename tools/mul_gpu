@@ -1,0 +1,39 @@
+#!/usr/bin/python                                                                                                     
+
+import multiprocessing
+from subprocess import *
+import sys
+import os
+import time
+import socket
+
+def worker(num, cmdstr):
+    """thread worker function"""
+    node=("pkbe-gpu%d")%num
+    chkstr = ["ssh", "-o","ConnectTimeout=3",node, cmdstr, "--config /data/local/scratch/mat_test/config_" + str(num) + ".conf -o /data/local/scratch/mat_test/Vela_280916/"]
+    output =  Popen(chkstr, stdout=PIPE, stderr=PIPE)
+    while output.poll() is None:
+        line = output.stdout.readline()
+        print line
+    #sys.stderr.write(('%d %s')% (num, output[0]))
+    print output.stdout().read()
+    return
+
+if __name__ == '__main__':
+   
+    if socket.gethostname() != "pktos01":
+        sys.stderr.write ("Command can be run only from pkstos01\n")
+        sys.exit()
+
+    if len(sys.argv) is not 2:
+        sys.stderr.write ("No enough arguments\n")
+        sys.exit()
+    jobs = []
+    for i in range(8):
+        p = multiprocessing.Process(target=worker, args=(i,sys.argv[1]))
+        jobs.append(p)
+        p.start()
+
+    for p in jobs:
+        p.join()
+    print "...done"

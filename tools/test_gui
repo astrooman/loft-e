@@ -1,0 +1,33 @@
+#!/usr/bin/python
+
+from Tkinter import *
+
+class App:
+    
+    def __init__(self, master):
+        
+        frame = Frame(master,width=1024,height=768)
+        frame.pack()
+
+        self.leave = Button(frame, text = "Quit", fg="red", command=frame.quit)
+        self.leave.pack(side=RIGHT)
+
+        self.hello = Button(frame, text="Hello", command=self.say_hi)
+        self.hello.pack(side=LEFT)
+
+       # Label(master, text="First").grid(row=0)
+       # Label(master, text="Second").grid(row=1)
+
+           
+ 
+    def say_hi(self):
+        print "Hello peoplez"
+
+if __name__ == "__main__":
+
+    root = Tk()
+    root.geometry("1024x768")
+    app = App(root)
+
+    root.mainloop()
+    root.destroy()

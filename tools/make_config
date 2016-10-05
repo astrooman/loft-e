@@ -1,0 +1,20 @@
+#!/bin/bash
+
+for x in {0..8}
+do
+    FILE="config_${x}.conf"
+    echo "Creating ${FILE}"
+    rm $FILE
+    touch $FILE
+    echo "DEDISP_GULP 131072" >> $FILE 
+    echo "IP 10.17.${x}.1,10.17.${x}.2" >> $FILE
+    echo "GPU_IDS 0,2" >> $FILE
+    echo "NO_GPUS 2" >> $FILE
+    echo "NO_STREAMS 4">> $FILE
+    echo "FREQ_AVERAGE 16" >> $FILE
+    echo "DM_START 0" >> $FILE
+    echo "DM_END 2000" >> $FILE
+    echo "NO_1MHZ_CHANS 336" >> $FILE 
+
+    rsync --progress $FILE pkbe-gpu${x}:/data/local/scratch/mat_test
+done
