@@ -62,7 +62,7 @@ int main(int argc, char *argv[])
             } else if (std::string(argv[ii]) == "-s") {     // the number of streams to use
                 ii++;
                 config.streamno = atoi(argv[ii]);
-            } else if (std::string(argv[ii]) == "-b") {     // the number of beams to accept the data from
+            } else if (std::string(argv[ii]) == "-b") {     // the number of telescopes to accept the data from
                 ii++;
                 config.beamno = atoi(argv[ii]);
             } else if (std::string(argv[ii]) == "-t") {     // the number of time sample to average
@@ -136,7 +136,7 @@ int main(int argc, char *argv[])
             cout << "\t\t * " << config.ips[ii] << endl;
         }
     }
-    
+
     Oberpool mypool(config);
 
     std::this_thread::sleep_for(std::chrono::seconds(2));

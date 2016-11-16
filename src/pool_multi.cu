@@ -54,7 +54,7 @@ using std::vector;
 #define BYTES_PER_WORD 8
 #define HEADER 64
 #define WORDS_PER_PACKET 896
-#define BUFLEN 7232
+#define BUFLEN 
 #define PORTS 8
 
 mutex cout_guard;
@@ -63,11 +63,11 @@ mutex cout_guard;
 TODO: Too many copies - could I use move in certain places?
 #########################################################*/
 
-/*##############################################
+/*####################################################
 IMPORTANT: from what I seen in the system files:
-eth3, gpu0, gpu1 - NUMA node 0, CPUs 0-7
-eth2, gpu2, gpu3 - NUMA node 1, CPUs 8-15
-##############################################*/
+There is only one NUMA note.
+6 (sic!) physical core, 12 if we really want to use HT
+####################################################*/
 
 Oberpool::Oberpool(config_s config) : ngpus(config.ngpus)
 {
@@ -94,8 +94,8 @@ bool GPUpool::working_ = true;
 
 GPUpool::GPUpool(int id, config_s config) : accumulate(config.accumulate),
                                         beamno{0},
-                                        filchans_(config.filchans), 
-                                        gpuid(config.gpuids[id]),
+                                        filchans_(config.filchans),
+                                        gpuid_(config.gpuids[id]),
                                         strip(config.ips[id]),
                                         highest_buf(0),
                                         batchsize(config.batch),
@@ -118,7 +118,7 @@ GPUpool::GPUpool(int id, config_s config) : accumulate(config.accumulate),
 					                    packcount(0),
 
 {
-    avt = min(nostreams + 2, thread::hardware_concurrency());
+    avt = min(nostreams + 1, thread::hardware_concurrency());
 
     config_ = config;
 
@@ -132,15 +132,13 @@ GPUpool::GPUpool(int id, config_s config) : accumulate(config.accumulate),
 
 void GPUpool::execute(void)
 {
-    struct bitmask *mask = numa_parse_nodestring((std::to_string(poolid_)).c_str());
-    numa_bind(mask);
 
     signal(SIGINT, GPUpool::HandleSignal);
-    cudaCheckError(cudaSetDevice(poolid_));
+    cudaCheckError(cudaSetDevice(gpuid_));
 
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET((int)(poolid_) * 8, &cpuset);
+    CPU_SET((int)(poolid_) * 3, &cpuset);
     int retaff = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
     if (retaff != 0) {
@@ -151,7 +149,7 @@ void GPUpool::execute(void)
 
     if(verbose_) {
         cout_guard.lock();
-        cout << "GPU pool for device " << gpuid << " running on CPU " << sched_getcpu() << endl;
+        cout << "GPU pool for device " << gpuid_ << " running on CPU " << sched_getcpu() << endl;
         cout_guard.unlock();
     }
 
@@ -159,7 +157,7 @@ void GPUpool::execute(void)
     p_mainbuffer = unique_ptr<Buffer<float>>(new Buffer<float>(gpuid));
 
     frame_times = new int[accumulate * nostreams];
-    // every thread will be associated with its own CUDA streams
+    // every thread will be associated with its own CUDA stream
     mystreams = new cudaStream_t[avt];
     // each worker stream will have its own cuFFT plan
     myplans = new cufftHandle[nostreams];
@@ -167,7 +165,6 @@ void GPUpool::execute(void)
     int nkernels = 4;
     CUDAthreads = new unsigned int[nkernels];
     CUDAblocks = new unsigned int[nkernels];
-    // TODO: make a private const data memmber and put in the initializer list!!
     nchans = config_.nchans;
 
     CUDAthreads[0] = 7;
@@ -213,7 +210,7 @@ void GPUpool::execute(void)
     // each stream will have its own incoming buffeer to read from
     pack_per_buf = batchsize / 7 * accumulate * nostreams;
     h_pol = new unsigned char[d_rearrange_size * nostreams];
-    bufidx_array = new bool[pack_per_buf]();
+    bufidx_array = new bool[pack_per_buf];
     cudaCheckError(cudaHostAlloc((void**)&h_in, d_rearrange_size * nostreams * sizeof(unsigned char), cudaHostAllocDefault));
     cudaCheckError(cudaMalloc((void**)&d_in, d_in_size * nostreams * sizeof(cufftComplex)));
     cudaCheckError(cudaMalloc((void**)&d_fft, d_fft_size * nostreams * sizeof(cufftComplex)));
@@ -459,9 +456,9 @@ GPUpool::~GPUpool(void)
 
     //save the scaling factors before quitting
     if (scaled_) {
-        string scalename = config_.outdir + "/scale_beam_" + std::to_string(beamno) + ".dat"; 
+        string scalename = config_.outdir + "/scale_beam_" + std::to_string(beamno) + ".dat";
         std::fstream scalefile(scalename.c_str(), std::ios_base::out | std::ios_base::trunc);
-        
+
         if (scalefile) {
             float *means = new float[filchans_];
             float *stdevs = new float[filchans_];
@@ -472,7 +469,7 @@ GPUpool::~GPUpool(void)
                     scalefile << means[jj] << " " << stdevs[jj] << endl;
                 }
                 scalefile << endl << endl;
-            }   
+            }
         }
         scalefile.close();
     }
@@ -510,8 +507,8 @@ GPUpool::~GPUpool(void)
     delete [] h_stdevs_;
     cudaCheckError(cudaFree(d_means_));
     cudaCheckError(cudaFree(d_rstdevs_));
-   
-    
+
+
     cudaCheckError(cudaFree(d_in));
     cudaCheckError(cudaFree(d_fft));
     cudaCheckError(cudaFreeHost(h_in));
@@ -550,8 +547,6 @@ void GPUpool::worker(int stream)
     }
 
     cudaSetDevice(gpuid);
-    dim3 rearrange_b(1,48,1);
-    dim3 rearrange_t(7,1,1);
     unsigned int skip = stream * d_in_size;
 
     unsigned int current_frame;
@@ -599,10 +594,8 @@ void GPUpool::worker(int stream)
 
             obs_time frame_time{start_time.start_epoch, start_time.start_second, current_frame};
             cudaCheckError(cudaMemcpyToArrayAsync(d_array2Dp[stream], 0, 0, h_in + stream * d_rearrange_size, d_rearrange_size, cudaMemcpyHostToDevice, mystreams[stream]));
-            rearrange2<<<rearrange_b, rearrange_t, 0, mystreams[stream]>>>(texObj[stream], d_in + skip, accumulate);
             cufftCheckError(cufftExecC2C(myplans[stream], d_in + skip, d_fft + skip, CUFFT_FORWARD));
             powertime2<<<48, 27, 0, mystreams[stream]>>>(d_fft + skip, pdv_time_scrunch, d_time_scrunch_size, timeavg, accumulate);
-            //addchannel2<<<CUDAblocks[3], CUDAthreads[3], 0, mystreams[stream]>>>(pdv_time_scrunch, pd_fil, (short)config_.filchans, config_.gulp, dedisp_buffsize, dedisp_buffno, d_time_scrunch_size, freqavg, current_frame, accumulate);
             addchanscale<<<CUDAblocks[3], CUDAthreads[3], 0, mystreams[stream]>>>(pdv_time_scrunch, pd_fil, (short)filchans_, config_.gulp, dedisp_buffsize, dedisp_buffno, d_time_scrunch_size, freqavg, current_frame, accumulate, d_means_, d_rstdevs_);
             cudaStreamSynchronize(mystreams[stream]);
             // used to check for any possible errors in the kernel execution
@@ -708,26 +701,22 @@ void GPUpool::receive_thread(int ii)
 
     const int pack_per_worker_buf = pack_per_buf / nostreams;
     int numbytes{0};
-    short fpga{0};
     short bufidx{0};
     // this will always be an integer
     int frame{0};
-    int ref_s{0};
+    int refs{0};
     int packcount{0};
     int group{0};
 
     if (ii == 0) {
-        unsigned char *temp_buf = rec_bufs[0];
-        numbytes = recvfrom(sfds[ii], rec_bufs[ii], BUFLEN - 1, 0, (struct sockaddr*)&their_addr, &addr_len);
-        start_time.start_epoch = (int)(temp_buf[12] >> 2);
-        start_time.start_second = (int)(temp_buf[3] | (temp_buf[2] << 8) | (temp_buf[1] << 16) | ((temp_buf[0] & 0x3f) << 24));
-        beamno = (int)(temp_buf[23] | (temp_buf[22] << 8));
+        unsigned char *tempbuf = recbufs[0];
+        numbytes = recvfrom(sfds[0], recbufs[0], BUFLEN, 0, (struct sockaddr*)&their_addr, &addr_len);
+        start_time.start_epoch = (int)(tempbuf[4] >> 0x3f);
+        start_time.start_second = (int)(tempbuf[3] | (temp_buf[2] << 8) | (temp_buf[1] << 16) | ((temp_buf[0] & 0x3f) << 24));
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
     while (true) {
-        if ((numbytes = recvfrom(sfds[ii], rec_bufs[ii], BUFLEN - 1, 0, (struct sockaddr*)&their_addr, &addr_len)) == -1) {
+        if ((numbytes = recvfrom(sfds[ii], recbufs[ii], BUFLEN, 0, (struct sockaddr*)&their_addr, &addr_len)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << 17100 + ii << endl;
             cerr << "Errno " << errno << endl;
@@ -735,14 +724,14 @@ void GPUpool::receive_thread(int ii)
         }
         if (numbytes == 0)
             continue;
-        frame = (int)(rec_bufs[ii][7] | (rec_bufs[ii][6] << 8) | (rec_bufs[ii][5] << 16) | (rec_bufs[ii][4] << 24));
+        frame = (int)(recbufs[ii][7] | (recbufs[ii][6] << 8) | (recbufs[ii][5] << 16));
         if (frame == 0) {
             break;
-        }
+        } // wait until reaching frame zero of next second before beginnning recording
     }
 
     while(working_) {
-        if ((numbytes = recvfrom(sfds[ii], rec_bufs[ii], BUFLEN - 1, 0, (struct sockaddr*)&their_addr, &addr_len)) == -1) {
+        if ((numbytes = recvfrom(sfds[ii], recbufs[ii], BUFLEN, 0, (struct sockaddr*)&their_addr, &addr_len)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << 17100 + ii << endl;
             cerr << "Errno " << errno << endl;
@@ -750,25 +739,16 @@ void GPUpool::receive_thread(int ii)
         }
         if (numbytes == 0)
             continue;
-        ref_s = (int)(rec_bufs[ii][3] | (rec_bufs[ii][2] << 8) | (rec_bufs[ii][1] << 16) | ((rec_bufs[ii][0] & 0x3f) << 24));
-        frame = (int)(rec_bufs[ii][7] | (rec_bufs[ii][6] << 8) | (rec_bufs[ii][5] << 16) | (rec_bufs[ii][4] << 24));
-        fpga = ((short)((((struct sockaddr_in*)&their_addr)->sin_addr.s_addr >> 16) & 0xff) - 1) * 6 + ((int)((((struct sockaddr_in*)&their_addr)->sin_addr.s_addr >> 24)& 0xff) - 1) / 2;
-        frame = frame + (ref_s - start_time.start_second - 27) / 27 * 250000;
+        refs = (int)(recbufs[ii][3] | (recbufs[ii][2] << 8) | (recbufs[ii][1] << 16) | ((recbufs[ii][0] & 0x3f) << 24));
+        frame = (int)(recbufs[ii][7] | (recbufs[ii][6] << 8) | (recbufs[ii][5] << 16);
+        frame = frame + (refs - start_time.start_second - 1) / 1 * 4000; //running tally of total frames (1 pol) subtract 1 because you skip the first second as it prob. didn't start recording on frame zero
 
         // looking at how much stuff we are not missing - remove a lot of checking for now
         // TODO: add some mininal checks later anyway
-        //if (frame >= 131008) {
-        // which half of the buffer to put the data in
-        bufidx = ((int)(frame / accumulate) % nostreams) * pack_per_worker_buf;
-        // frame position in the half
-        bufidx += (frame % accumulate) * 48;
-        frame_times[frame % (accumulate * nostreams)] = frame;
-        // frequency chunk in the frame
-        bufidx += fpga;
-        std::copy(rec_bufs[ii] + HEADER, rec_bufs[ii] + BUFLEN, h_pol + (BUFLEN - HEADER) * bufidx);
-        //cout << bufidx << endl;
-        //cout.flush();
-        bufidx_array[bufidx] = true;
+        bufidx = (((int)frame / accumulate) % nostream) * accumulate) + (frame % accumulate);
+        frametimes[bufidx] = frame;
+        std::copy(recbufs[ii] + HEADER, recbufs[ii] + BUFLEN, h_pol[polid_] + (BUFLEN - HEADER) * bufidx)//copy data
+        bufidxarray[bufidx] = true;
         //}
     }
 }

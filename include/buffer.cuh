@@ -32,31 +32,32 @@ struct obs_time {
 
 };
 
-template <class T>
+template <class BufferType>
 class Buffer
 {
     private:
-        vector<thrust::device_vector<float>> d_filterbank;              // stores different Stoke parameters
-        vector<thrust::host_vector<float>> h_filterbank;                // stores Stokes parameters in the RAM buffer
-        float **pd_filterbank;                                          // array of raw pointers to Stoke parameters device vectors
-        float **ph_filterbank;                                          // same as above but for host vector
-        float *ph_fil;
-        size_t totsize;            // total size of the data: #gulps * gulp size + extra samples for dedispersion
-        size_t gulp;            // size of the single gulp
-        size_t extra;           // number of extra time samples required to process the full gulp
-        int accumulate;
-        int gpuid;
-        int gulpno;             // number of gulps required in the buffer
-        int nchans;             // number of filterbank channels per time sample
-        int stokes;             // number of Stokes parameters to keep in the buffer
-        int fil_saved;
-        mutex buffermutex;
-        mutex statemutex;
-        size_t start;
-        size_t end;
-        obs_time *gulp_times;
-        T *d_buf;
-        unsigned int *sample_state;     // 0 for no data, 1 for data
+        vector<thrust::device_vector<BufferType>> d_filterbank_;              // stores different Stoke parameters
+        vector<thrust::host_vector<BufferType>> h_filterbank_;                // stores Stokes parameters in the RAM buffer
+        BufferType **pd_filterbank_;                                          // array of raw pointers to Stoke parameters device vectors
+        BufferType **ph_filterbank_;                                          // same as above but for host vector
+        BufferType *ph_fil_;
+        size_t totsize_;            // total size of the data: #gulps * gulp size + extra samples for dedispersion
+        size_t gulp_;            // size of the single gulp
+        size_t extra_;           // number of extra time samples required to process the full gulp
+        int accumulate_;
+        int gpuid_;
+        int gulpno_;             // number of gulps required in the buffer
+        int nchans_;             // number of filterbank channels per time sample
+        int stokes_;             // number of Stokes parameters to keep in the buffer
+        int fil_saved_;
+        mutex buffermutex_;
+        mutex statemutex_;
+        size_t start_;
+        size_t end_;
+        obs_time *gulp_times_;
+        // TODO: do we still need that?
+        BufferType *d_buf_;
+        unsigned int *state_;     // 0 for no data, 1 for data
     protected:
 
     public:
@@ -76,36 +77,35 @@ class Buffer
         // add deleted copy, move, etc constructors
 };
 
-template<class T>
-Buffer<T>::Buffer(int id) : gpuid(id)
+template<class BufferType>
+Buffer<BufferType>::Buffer(int id) : gpuid_(id)
 {
-    cudaSetDevice(gpuid);
-    start = 0;
-    end = 0;
+    cudaSetDevice(gpuid_);
+    start_ = 0;
+    end_ = 0;
 }
 
-template<class T>
-Buffer<T>::Buffer(int gulpno_u, size_t extra_u, size_t gulp_u, size_t size_u, int id) : extra(extra_u),
+template<class BufferType>
+Buffer<BufferType>::Buffer(int gulpno_u, size_t extra_u, size_t gulp_u, size_t size_u, int id) : extra(extra_u),
                                                                                 gulp(gulp_u),
                                                                                 gulpno(gulpno_u),
                                                                                 totsize(size_u),
-                                                                                gpuid(id)
+                                                                                gpuid_(id)
 {
     start = 0;
     end = 0;
-    //cudaMalloc((void**)&d_buf, totsize * sizeof(T));
     sample_state = new unsigned int[(int)totsize];
     std::fill(sample_state, sample_state + totsize, 0);
 }
 
-template<class T>
-Buffer<T>::~Buffer()
+template<class BufferType>
+Buffer<BufferType>::~Buffer()
 {
     end = 0;
 }
 
-template<class T>
-void Buffer<T>::allocate(int acc_u, int gulpno_u, size_t extra_u, size_t gulp_u, size_t size_u, int filchans, int stokes_u)
+template<class BufferType>
+void Buffer<BufferType>::allocate(int acc_u, int gulpno_u, size_t extra_u, size_t gulp_u, size_t size_u, int filchans, int stokes_u)
 {
     fil_saved = 0;
     accumulate = acc_u;
@@ -177,7 +177,7 @@ void Buffer<T>::rescale(int idx, cudaStream_t &stream, float **d_means, float **
     cudaFree(d_transpose);
     // need this so I don't save this buffer
     statemutex.lock();
-    sample_state[idx * gulp + extra - 1] = 0;   
+    sample_state[idx * gulp + extra - 1] = 0;
     statemutex.unlock();
 }
 

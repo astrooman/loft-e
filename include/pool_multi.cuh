@@ -107,7 +107,7 @@ class GPUpool
         float **h_stdevs_;
         float **d_means_;
         float **d_rstdevs_;
-        
+
         obs_time start_time;
         config_s config_;
         bool *bufidx_array;
@@ -138,7 +138,7 @@ class GPUpool
         unsigned int filsize;
         // polarisations buffer
         unsigned char *h_pol;           //!< Buffer for semi-arranged packets for the whole bandwidth and 128 time samples
-        int gpuid;                      //!< Self-explanatory
+        int gpuid_;                      //!< Self-explanatory
         int pol_begin;
         int *frame_times;               //!< Array for the absolute frame numbers for given buffers
         // GPU and thread stuff
