@@ -24,13 +24,6 @@
 #include "config.hpp"
 #include "dedisp/DedispPlan.hpp"
 
-using boost::asio::ip::udp;
-using std::mutex;
-using std::pair;
-using std::queue;
-using std::thread;
-using std::vector;
-
 class GPUpool;
 
 /*! \class Oberpool
@@ -69,126 +62,25 @@ class Oberpool
 class GPUpool
 {
     private:
-        // that can be anything, depending on how many output bits we decide to use
-        //Buffer<float> mainbuffer;
-        std::unique_ptr<Buffer<float>> p_mainbuffer;
-        //DedispPlan dedisp;
-        std::unique_ptr<DedispPlan> p_dedisp;
-        hd_pipeline pipeline;
-        hd_params params;
-        int packcount;
-        vector<thrust::device_vector<float>> dv_time_scrunch;   //!< Time scrunched buffer, addtime() kernel output, addchannel() kernel input; holds GPUpool::nostreams device vectors, each holding GPUpool::d_time_scrunch_size * GPUpool::stokes elements
-        vector<thrust::device_vector<float>> dv_freq_scrunch;   //!< Frequency scrunched buffer, addchannel() kernel output; holds GPUpool::nostreams device vectors, each holding GPUpool::d_freq_scrunch_size * GPUpool::stokes elements
 
-        // networking
-        unsigned char **rec_bufs;
-        int *sfds;
+        std::vector<int> ports_;
+        std::vector<std::string> strip_;
+        std::vector<std::thread> receivethreads_;
 
-/*
-        float *pdv_power;
-        float *pdv_time_scrunch;
-        float *pdv_freq_scrunch;
-*/
-        // TEXTURING
-        cudaChannelFormatDesc cdesc;
-        cudaArray **d_array2Dp;
-        cudaResourceDesc *rdesc;
-        cudaTextureDesc *tdesc;
-        cudaTextureObject_t *texObj;
-
-        // MUTEXES
-        mutex buffermutex;
-        mutex printmutex;
-        mutex workermutex;
-
-        // SCALING
-        bool scaled_;
-        float **h_means_;
-        float **h_stdevs_;
-        float **d_means_;
-        float **d_rstdevs_;
-
-        obs_time start_time;
-        config_s config_;
-        bool *bufidx_array;
-        bool working;
         bool verbose_;
-        static bool working_;
-        bool buffer_ready[2];
-        bool worker_ready[2];
-        int worker_frame[2];
-        // const to be safe
-        // keep d_in_size and d_fft_size separate just in case the way the fft is done changes
-        const unsigned int d_rearrange_size;
-        const unsigned int d_in_size;               //!< size of single fft * # 1MHz channels * # time samples to average * # polarisations
-        const unsigned int d_fft_size;              //!< size of single fft * # 1MHz channels * # time samples to average * # polarisations        const unsigned int d_time_scrunch_size;     //!< (size of single fft - 5) * # 1MHz channels
-        const unsigned int d_time_scrunch_size;      //!< (size of single fft - 5) * # 1MHz channels
-        const unsigned int d_freq_scrunch_size;     //!< d_time_scrunch_size / # frequency channels to average
-        const unsigned int accumulate;              //!< The number of 108us chunks to accumulate for the GPU processing
-        const unsigned int batchsize;               //!< The number of 1MHz channels to process
-        const unsigned int fftpoint;                //!< Size of the single FFT
-        const unsigned int filchans_;                //!< Number of output filterbank channels
-        const unsigned int nostreams;               //!< Number of CUDA streams to use
-        const unsigned int timeavg;                 //!< Number of post-FFT time samples to average
-        const unsigned int freqavg;                 //!< Number of post-FFT frequency channels to average
-        const unsigned int npol;                    //!< Number of polarisations in the input data
-        unsigned int nchans;                        //!< Number of 1MHz channels in the input data
-        unsigned int stokes;                        //!< Number of stoke parameters to generate and store
-        // one buffer
-        unsigned int filsize;
-        // polarisations buffer
-        unsigned char *h_pol;           //!< Buffer for semi-arranged packets for the whole bandwidth and 128 time samples
-        int gpuid_;                      //!< Self-explanatory
-        int pol_begin;
-        int *frame_times;               //!< Array for the absolute frame numbers for given buffers
-        // GPU and thread stuff
-        // raw voltage buffers
-        // d_in is a cufftExecC2C() input
-        unsigned char *h_in = 0;        //!< Raw voltage host buffer, async copied to d_in in the GPUpool::worker()
-        cufftComplex *d_in = 0;         //!< Raw voltage device buffer, cufftExecC2C() input, holds GPUpool::d_in_size * GPUpool::nostreams elements
-        // the ffted signal buffer
-        // cufftExecC2C() output
-        // powerscale() kernel input
-        cufftComplex *d_fft;            //!< Buffer for the signal after the FFT, powerscale() kernel input, holds GPUpool::d_fft_size * GPUpool::nostreams elements
-        // the detected signal buffer
-        // powerscale() kernel output
-        // addtime() kernel input
-        float *d_power;                 //!< No longer in use
-        // the time scrunched signal buffer
-        // addtime() kernel output
-        // addchannel() kernel input
-        float *d_time_scrunch;          //!< No longer in use
-        // the frequency schruned signal buffer
-        // addchannel() kernel output
-        float *d_freq_scrunch;          //!< No longer in use
-        unsigned char *d_dedisp;        //!< Not in use in the dump mode
-        unsigned char *d_search;        //!< Not in use in the dump mode
 
-        unsigned int gulps_sent;
-        unsigned int gulps_processed;
-        int sizes[1];                   //<! Used to store GPUpool::fftpoint - cufftPlanMany() requirement
-        int avt;
-        int beamno;
-        int poolid_;
-        size_t highest_buf;
-        size_t highest_frame;
-        cudaStream_t *mystreams;        //<! Pointer to the array of CUDA streams
-        cufftHandle *myplans;           //<! Pointer to the array of cuFFT plans
-        mutex datamutex;
-        mutex workmutex;
-        unsigned int *CUDAthreads;      //<! Pointer to the array of thread layouts for different kernels
-        unsigned int *CUDAblocks;       //<! Pointer to the array of block layouts for different kernels
-        // containers
-        // use queue as FIFO needed
-        queue<pair<vector<cufftComplex>, obs_time>> mydata;
-        //queue<vector<cufftComplex>> mydata;
-        vector<thread> mythreads;
-        vector<thread> receive_threads;
-        unsigned int dedisp_buffno;
-        int pack_per_buf;
-        size_t dedisp_buffsize;
-        size_t dedisp_totsamples;
-        std::string strip;
+        InConfig config_;
+
+        int *sockfiledesc_
+
+        unsigned char **recbufs_;
+
+        unsigned int accumulate_;
+        unsigned int availthreads_;
+        unsigned int gpuid_;
+        unsigned int noports_;
+        unsigned int nostreams_;
+
     protected:
 
     public:
@@ -268,7 +160,7 @@ class GPUpool
         */
         void receive_handler(const boost::system::error_code& error, std::size_t bytes_transferred, udp::endpoint endpoint);
         //! Calls async_receive_from() on the UDP socket.
-        void receive_thread(int ii);
+        void ReceiveData(int ii);
         //! Single pulse search thread worker.
         /*! Responsible for picking up the dedispersed data buffer and dispatching it to the single pulse search pipeline.
             Calls hd_execute() and saves the filterbank if the appropriate single pulse has been detected.

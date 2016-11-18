@@ -10,12 +10,6 @@
 
 #include <heimdall/params.hpp>
 
-using std::cout;
-using std::endl;
-using std::string;
-using std::stod;
-using std::stoi;
-
 struct config_s {
     bool test;
     bool verbose;
@@ -25,13 +19,16 @@ struct config_s {
     double dstart;
     double foff;                // channel width in MHz
     double ftop;                // frequency of the top channel in MHz
+    double toread;
     double tsamp;               // sampling time
+
 
     std::string outdir;
 
     std::vector<int> gpuids;
     std::vector<std::string> ips;
     std::vector<int> killmask;
+    std::vector<std::vector<int>> ports;
 
     unsigned int accumulate;    // number of 108us complete chunks to process on the GPU at once
     unsigned int batch;
@@ -55,7 +52,7 @@ inline void default_config(config_s &config) {
     config.test = false;
     config.verbose = false;
 
-    config.accumulate = 8;
+    config.accumulate = 4000;
     config.band = 1.185;
     config.dstart = 0.0;
     config.dend = 4000.0;
@@ -85,60 +82,104 @@ inline void default_config(config_s &config) {
          (config.killmask).push_back((int)1);
 }
 
-inline void read_config(string filename, config_s &config) {
+inline void print_config(const config_s &config) {
+
+    // polymorphic lambda needs g++ version 4.9 or higher
+    // std::vector<auto> might not work on all systems
+    auto plambda = [](std::ostream &os, std::string sintro, std::vector<auto> values) -> std::ostream& {
+        os << sintro << ": ";
+        for (auto iptr = values.begin(); iptr != values.end(); iptr++)
+            os << *iptr << " ";
+        os << endl;
+        retrun os;
+    };
+
+    std::cout << "Configuration overview: " << std::endl;
+    std::cout << "\tNumber of GPUs to use: " << config.ngpus << std::endl;
+    plambda(std::cout, "\t\tIDs", config.gpuids);
+    std::cout << "\tNumber of CUDA streams used for filterbanking: " << config.streamno << std::endl;
+    plambda(std::cout, "\tIPs to use", config.ips);
+    cout << "\tPorts to use";
+    for (int ii = 0; ii < config.ports.size(); ii++)
+        plambda(std::cout, "\t\t" + config.ips[ii], config.ports[ii]);
+    std::cout << "\tOutput directory: " << config.outdir << std::endl;
+    std::cout << "\tNumber of generater filterbank channels: " << config.filchans << std::endl;
+    std::cout << "\tNumber of channels to average: " << config.freqavg << std::endl;
+    std::cout << "\tNumber of time samples to average:" << config.timesavf << std::endl;
+    std::cout << "!!!CURRENTLY NOT IN USE!!!: " << std::endl;
+    std::cout << "\tDedisperse gulp size: " << config.gulp << std::endl;
+    std::cout << "\tStart DM: " << config.dstart << std::endl;
+    std::cout << "\tEnd DM: " << config.dend << std::endl;
+
+}
+
+inline void read_config(std::string filename, config_s &config) {
 
     std::fstream inconfig(filename.c_str(), std::ios_base::in);
-    string line;
-    string paraname;
-    string paravalue;
+    std::string line;
+    std::string paraname;
+    std::string paravalue;
 
     if(inconfig) {
         while(std::getline(inconfig, line)) {
             std::istringstream ossline(line);
             ossline >> paraname >> paravalue;
-            std::stringstream svalue;
 
             if (paraname == "DM_END") {
                 config.dend = stod(paravalue);
             } else if (paraname == "DM_START") {
                 config.dstart = stod(paravalue);
             } else if (paraname == "FFT_SIZE") {
-                config.fftsize = (unsigned int)(stoi(paravalue));
+                config.fftsize = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "FREQ_AVERAGE") {
-                config.freqavg = (unsigned int)(stoi(paravalue));
+                config.freqavg = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "DEDISP_GULP") {
-                config.gulp = (unsigned int)(stoi(paravalue));
+                config.gulp = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "GPU_IDS") {
-                std::stringstream svalue(paravalue);
-                string sep;
-                while(std::getline(svalue, sep, ','))
-                    config.gpuids.push_back(stoi(sep));
+                std::istringstream svalue(paravalue);
+                std::string strgpu;
+                while(std::getline(svalue, strgpu, ','))
+                    config.gpuids.push_back(std::stoi(strgpu));
             } else if (paraname == "IP") {
-                std::stringstream svalue(paravalue);
-                string sep;
-                while(std::getline(svalue, sep, ','))
-                    config.ips.push_back(sep);
+                std::istringstream svalue(paravalue);
+                std::string strip;
+                while(std::getline(svalue, strip, ','))
+                    config.ips.push_back(strip);
             } else if (paraname == "NO_1MHZ_CHANS") {
-                config.nchans = (unsigned int)(stoi(paravalue));
+                config.nchans = (unsigned int)(std::stoi(paravalue));
                 config.batch = config.nchans;
             } else if (paraname == "NO_BEAMS") {
-                config.beamno = (unsigned int)(stoi(paravalue));
+                config.beamno = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "NO_GPUS") {
-                config.ngpus = (unsigned int)(stoi(paravalue));
+                config.ngpus = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "NO_POLS") {
-                config.npol = stoi(paravalue);
+                config.npol = std::stoi(paravalue);
             } else if (paraname == "NO_STOKES") {
-                config.stokes = stoi(paravalue);
+                config.stokes = std::stoi(paravalue);
             } else if (paraname == "NO_STREAMS") {
-                config.streamno = (unsigned int)(stoi(paravalue));
+                config.streamno = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "PORTS") {
+                std::istringstream ssvalue(paravalue);
+                std::string ipports;
+                while(std::getline(ssvalue, ipporst, ';')) {
+                    std::vector vtmp;
+                    std::istringstream ssports(ipports);
+                    std::string singleport;
+                    while(std::getline(ssports, singleport, ','))
+                        vtmp.push_back(stoi(singleport));
+
+                    config.ports.push_back(vtmp);
+                }
+            } else if (paraname == "READ") {
+                config.toread = std::stod(paravalue);
             } else if (paraname == "TIME_AVERAGE") {
-                config.timesavg = (unsigned int)(stoi(paravalue));
+                config.timesavg = (unsigned int)(std::stoi(paravalue));
             } else {
-                cout << "Error: unrecognised parameter: " << paraname << endl;
+                std::cout << "Error: unrecognised parameter: " << paraname << std::endl;
             }
         }
     } else {
-        cout << "Error opening the configuration file!!\n Will use default configuration instead." << endl;
+        std::cout << "Error opening the configuration file!!\n Will use default configuration instead." << std::endl;
     }
 
     inconfig.close();

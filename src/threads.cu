@@ -102,6 +102,7 @@ int main(int argc, char *argv[])
                 cout << "Options:\n"
                         << "\t -h --help - print out this message\n"
                         << "\t --config <file name> - configuration file\n"
+                        << "\t - THE USE OF FOLLOWING OPTIONS WILL BE PHASED OUT! USE CONFIG FILE INSTEAD!\n"
                         << "\t -b - the number of beams to process\n"
                         << "\t -c - the number of chunks to process\n"
                         << "\t -f - the number of frequency channels to average\n"
