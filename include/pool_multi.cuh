@@ -23,6 +23,7 @@
 #include "buffer.cuh"
 #include "config.hpp"
 #include "dedisp/DedispPlan.hpp"
+#include "obs_time.hpp"
 
 class GPUpool;
 
@@ -43,7 +44,7 @@ class Oberpool
 
     public:
         Oberpool(void) = delete;
-        Oberpool(config_s config);
+        Oberpool(InConfig config);
         Oberpool(const Oberpool &inpool) = delete;
         Oberpool& operator=(const Oberpool &inpool) = delete;
         Oberpool(Oberpool &&inpool) = delete;
@@ -68,11 +69,15 @@ class GPUpool
         std::vector<std::thread> receivethreads_;
 
         bool verbose_;
+        static bool working_;
 
         InConfig config_;
 
-        int *sockfiledesc_
+        int *sockfiledesc_;
 
+        ObsTime starttime_;
+
+        unsigned char **inpol_;
         unsigned char **recbufs_;
 
         unsigned int accumulate_;
@@ -80,6 +85,8 @@ class GPUpool
         unsigned int gpuid_;
         unsigned int noports_;
         unsigned int nostreams_;
+        unsigned int packperbuf_;
+        unsigned int poolid_;
 
     protected:
 
@@ -94,7 +101,7 @@ class GPUpool
             \param id the GPU id to be set using cudaSetDevice()
             \param config the configuration structure
         */
-        GPUpool(int id, config_s config);
+        GPUpool(int id, InConfig config);
         ~GPUpool(void);
         //! A copy constructor.
         /*!
@@ -121,7 +128,7 @@ class GPUpool
         /*! Called in GPupool::get_data() method.
             Adds a pair to the queue consistinf of the data buffer and associated time structure.
         */
-        void add_data(cufftComplex *buffer, obs_time frame_time);
+        void add_data(cufftComplex *buffer, ObsTime frame_time);
         //! Dedispersion thread worker
         /*! Responsible for picking up the data buffer when ready and dispatching it to the dedispersion (Buffer::send() method).
             In the filterbank dump mode, responsible for initialising the dump (Buffer::dump() method).
@@ -139,7 +146,7 @@ class GPUpool
             \param fpga_id the FPGA number obtained from the sender's IP address; used to identify the frequency chunk and place in the buffer it will be saven in
             \param start_time structure containing the information when the current observation started (reference epoch and seconds from the reference epoch)
         */
-        void get_data(unsigned char* data, int fpga_id, obs_time start_time, header_s head);
+        void get_data(unsigned char* data, int fpga_id, ObsTime start_time, header_s head);
         //! Handles the SIGINT signal. Must be static.
         /*!
             \param signum signal number - should be 2 for SIGINT
@@ -158,9 +165,8 @@ class GPUpool
             \param endpoint udp::endpoint object containing sender information (used to obtain the fpga_id from the sender's IP)
 
         */
-        void receive_handler(const boost::system::error_code& error, std::size_t bytes_transferred, udp::endpoint endpoint);
         //! Calls async_receive_from() on the UDP socket.
-        void ReceiveData(int ii);
+        void ReceiveData(int portid, int recport);
         //! Single pulse search thread worker.
         /*! Responsible for picking up the dedispersed data buffer and dispatching it to the single pulse search pipeline.
             Calls hd_execute() and saves the filterbank if the appropriate single pulse has been detected.

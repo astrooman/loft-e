@@ -40,7 +40,7 @@ inline double get_mjd(int ref_epoch, size_t ref_second) {
     std::ofstream mydate("mjd.txt", std::ios_base::out | std::ios_base::trunc);
     mydate.precision(6);
     mydate.setf(std::ios::fixed);
-    mydate << mjd <<  " " << extra << endl;
+    mydate << mjd <<  " " << extra << std::endl;
     mydate.close();
 
     return mjd;

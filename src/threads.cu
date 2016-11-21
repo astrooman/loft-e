@@ -45,7 +45,7 @@ using std::vector;
 int main(int argc, char *argv[])
 {
     std::string config_file;
-    config_s config;
+    InConfig config;
     default_config(config);
 
     // too many parameters to load as arguments - use config file

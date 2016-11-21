@@ -10,7 +10,7 @@
 
 #include <heimdall/params.hpp>
 
-struct config_s {
+struct InConfig {
     bool test;
     bool verbose;
 
@@ -48,7 +48,7 @@ struct config_s {
 
 };
 
-inline void default_config(config_s &config) {
+inline void default_config(InConfig &config) {
     config.test = false;
     config.verbose = false;
 
@@ -82,30 +82,40 @@ inline void default_config(config_s &config) {
          (config.killmask).push_back((int)1);
 }
 
-inline void print_config(const config_s &config) {
+inline void print_config(const InConfig &config) {
 
     // polymorphic lambda needs g++ version 4.9 or higher
     // std::vector<auto> might not work on all systems
-    auto plambda = [](std::ostream &os, std::string sintro, std::vector<auto> values) -> std::ostream& {
+    // no support for C++14 with nvcc yet
+
+    auto plambda_s = [](std::ostream &os, std::string sintro, std::vector<std::string> values) -> std::ostream& {
         os << sintro << ": ";
         for (auto iptr = values.begin(); iptr != values.end(); iptr++)
             os << *iptr << " ";
-        os << endl;
-        retrun os;
+        os << std::endl;
+        return os;
+    };
+
+    auto plambda_i = [](std::ostream &os, std::string sintro, std::vector<int> values) -> std::ostream& {
+        os << sintro << ": ";
+        for (auto iptr = values.begin(); iptr != values.end(); iptr++)
+            os << *iptr << " ";
+        os << std::endl;
+        return os;
     };
 
     std::cout << "Configuration overview: " << std::endl;
     std::cout << "\tNumber of GPUs to use: " << config.ngpus << std::endl;
-    plambda(std::cout, "\t\tIDs", config.gpuids);
+    plambda_i(std::cout, "\t\tIDs", config.gpuids);
     std::cout << "\tNumber of CUDA streams used for filterbanking: " << config.streamno << std::endl;
-    plambda(std::cout, "\tIPs to use", config.ips);
-    cout << "\tPorts to use";
+    plambda_s(std::cout, "\tIPs to use", config.ips);
+    std::cout << "\tPorts to use";
     for (int ii = 0; ii < config.ports.size(); ii++)
-        plambda(std::cout, "\t\t" + config.ips[ii], config.ports[ii]);
+        plambda_i(std::cout, "\t\t" + config.ips[ii], config.ports[ii]);
     std::cout << "\tOutput directory: " << config.outdir << std::endl;
     std::cout << "\tNumber of generater filterbank channels: " << config.filchans << std::endl;
     std::cout << "\tNumber of channels to average: " << config.freqavg << std::endl;
-    std::cout << "\tNumber of time samples to average:" << config.timesavf << std::endl;
+    std::cout << "\tNumber of time samples to average:" << config.timesavg << std::endl;
     std::cout << "!!!CURRENTLY NOT IN USE!!!: " << std::endl;
     std::cout << "\tDedisperse gulp size: " << config.gulp << std::endl;
     std::cout << "\tStart DM: " << config.dstart << std::endl;
@@ -113,7 +123,7 @@ inline void print_config(const config_s &config) {
 
 }
 
-inline void read_config(std::string filename, config_s &config) {
+inline void read_config(std::string filename, InConfig &config) {
 
     std::fstream inconfig(filename.c_str(), std::ios_base::in);
     std::string line;
@@ -161,8 +171,8 @@ inline void read_config(std::string filename, config_s &config) {
             } else if (paraname == "PORTS") {
                 std::istringstream ssvalue(paravalue);
                 std::string ipports;
-                while(std::getline(ssvalue, ipporst, ';')) {
-                    std::vector vtmp;
+                while(std::getline(ssvalue, ipports, ';')) {
+                    std::vector<int> vtmp;
                     std::istringstream ssports(ipports);
                     std::string singleport;
                     while(std::getline(ssports, singleport, ','))
@@ -185,7 +195,7 @@ inline void read_config(std::string filename, config_s &config) {
     inconfig.close();
 }
 
-inline void set_search_params(hd_params &params, config_s config)
+inline void set_search_params(hd_params &params, InConfig config)
 {
     params.verbosity       = 0;
     #ifdef HAVE_PSRDADA

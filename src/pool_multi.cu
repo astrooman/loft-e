@@ -28,7 +28,7 @@
 #include "get_mjd.hpp"
 #include "heimdall/pipeline.hpp"
 #include "kernels.cuh"
-#include "paf_metadata.hpp"
+#include "obs_time.hpp"
 #include "pdif.hpp"
 #include "pool_multi.cuh"
 
@@ -42,12 +42,14 @@
 #include <unistd.h>
 #include <signal.h>
 
+using std::cerr;
 using std::cout;
 using std::endl;
 using std::mutex;
 using std::ostringstream;
 using std::pair;
 using std::queue;
+using std::string;
 using std::thread;
 using std::unique_ptr;
 using std::vector;
@@ -55,7 +57,7 @@ using std::vector;
 #define BYTES_PER_WORD 8
 #define HEADER 64
 #define WORDS_PER_PACKET 896
-#define BUFLEN
+#define BUFLEN 8000
 #define PORTS 8
 
 mutex cout_guard;
@@ -96,8 +98,9 @@ bool GPUpool::working_ = true;
 GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             gpuid_(config.gpuids[id]),
                                             nostreams_(config.streamno),
+                                            poolid_(id),
                                             ports_(config.ports[id]),
-                                            strip_(config.ips[id]),
+                                            // strip_(config.ips[id]),
                                             verbose_(config.verbose)
 
 
@@ -109,6 +112,7 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
     if (verbose_) {
         cout_guard.lock();
         cout << "Starting GPU pool " << gpuid_ << endl;
+        cout << "This may take few seconds..." << endl;
 	    cout.flush();
         cout_guard.unlock();
     }
@@ -140,6 +144,10 @@ void GPUpool::execute(void)
         cout_guard.unlock();
     }
 
+    // STAGE: memory
+    if (verbose_)
+        cout << "Initialising the memory..." << endl;
+
     // STAGE: networking
     if (verbose_)
         cout << "Setting up networking..." << endl;
@@ -163,25 +171,25 @@ void GPUpool::execute(void)
     // all the magic happens here
     for (int iport = 0; iport < noports_; iport++) {
         ssport.str("");
-        ssport << ports_[ii];
+        ssport << ports_[iport];
         strport = ssport.str();
 
-        if((netrv = getaddrinfo(strip_.c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
+        if((netrv = getaddrinfo(strip_[iport].c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
             cout_guard.lock();
             cerr <<  "getaddrinfo() error: " << gai_strerror(netrv) << endl;
             cout_guard.unlock();
         }
 
         for (tryme = servinfo; tryme != NULL; tryme=tryme->ai_next) {
-            if((sockfiledesc_[ii] = socket(tryme->ai_family, tryme->ai_socktype, tryme->ai_protocol)) == -1) {
+            if((sockfiledesc_[iport] = socket(tryme->ai_family, tryme->ai_socktype, tryme->ai_protocol)) == -1) {
                 cout_guard.lock();
                 cerr << "Socket error\n";
                 cout_guard.unlock();
                 continue;
             }
 
-            if(bind(sockfiledesc_[ii], tryme->ai_addr, tryme->ai_addrlen) == -1) {
-                close(sockfiledesc_[ii]);
+            if(bind(sockfiledesc_[iport], tryme->ai_addr, tryme->ai_addrlen) == -1) {
+                close(sockfiledesc_[iport]);
                 cout_guard.lock();
                 cerr << "Bind error\n";
                 cout_guard.unlock();
@@ -192,7 +200,7 @@ void GPUpool::execute(void)
 
         if (tryme == NULL) {
             cout_guard.lock();
-            cerr << "Failed to bind to the socket " << ports_[ii] << "\n";
+            cerr << "Failed to bind to the socket " << ports_[iport] << "\n";
             cout_guard.unlock();
         }
     }
@@ -200,16 +208,16 @@ void GPUpool::execute(void)
     int bufres{4*1024*1024};    // 4MB
 
     for (int iport = 0; iport < noports_; iport++) {
-        if(setsockopt(sockfiledesc_[ii], SOL_SOCKET, SO_RCVBUF, (char *)&bufres, sizeof(bufres)) != 0) {
+        if(setsockopt(sockfiledesc_[iport], SOL_SOCKET, SO_RCVBUF, (char *)&bufres, sizeof(bufres)) != 0) {
             cout_guard.lock();
-            cerr << "Setsockopt error on port " << ports_[ii] << endl;
+            cerr << "Setsockopt error on port " << ports_[iport] << endl;
             cerr << "Errno " << errno << endl;
             cout_guard.unlock();
         }
     }
 
     for (int iport = 0; iport < noports_; iport++)
-        receivethreads_.push_back(thread(&GPUpool::ReceiveData, this, ports_[ii]));
+        receivethreads_.push_back(thread(&GPUpool::ReceiveData, this, iport, ports_[iport]));
 
 }
 
@@ -224,13 +232,14 @@ void GPUpool::HandleSignal(int signum) {
     working_ = false;
 }
 
-void GPUpool::ReceiveData(int recport)
+void GPUpool::ReceiveData(int portid, int recport)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     // TODO: need to test how much we can squeeze out of the single core
     CPU_SET((int)(poolid_) * 3, &cpuset);
-    int retaff = pthread_setaffinity_np(receivethreads_[ii].native_handle(), sizeof(cpu_set_t), &cpuset);
+    // TODO: pass the thread ID properly
+    int retaff = pthread_setaffinity_np(receivethreads_[portid].native_handle(), sizeof(cpu_set_t), &cpuset);
     if (retaff != 0) {
         cout_guard.lock();
         cerr << "Error setting thread affinity for receive thread on port " << recport << endl;
@@ -248,7 +257,7 @@ void GPUpool::ReceiveData(int recport)
     socklen_t addrlen;
     memset(&addrlen, 0, sizeof(addrlen));
 
-    const int pack_per_worker_buf = pack_per_buf / nostreams;
+    const int pack_per_worker_buf = packperbuf_ / nostreams_;
     int numbytes{0};
     short bufidx{0};
     // this will always be an integer
@@ -262,11 +271,11 @@ void GPUpool::ReceiveData(int recport)
         unsigned char *tempbuf = recbufs_[0];
         numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen);
         starttime_.startepoch = (int)(tempbuf[4] & 0x3f);
-        starttime_.startsecond = (int)(tempbuf[3] | (temp_buf[2] << 8) | (temp_buf[1] << 16) | ((temp_buf[0] & 0x3f) << 24));
+        starttime_.startsecond = (int)(tempbuf[3] | (tempbuf[2] << 8) | (tempbuf[1] << 16) | ((tempbuf[0] & 0x3f) << 24));
     }
 
     while (true) {
-        if ((numbytes = recvfrom(sockfiledesc_[ii], recbufs_[ii], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << recport << endl;
             cerr << "Errno " << errno << endl;
@@ -274,14 +283,14 @@ void GPUpool::ReceiveData(int recport)
         }
         if (numbytes == 0)
             continue;
-        frameno = (int)(recbufs_[ii][7] | (recbufs_[ii][6] << 8) | (recbufs_[ii][5] << 16));
+        frameno = (int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
         if (frameno == 0) {
             break;
         } // wait until reaching frame zero of next second before beginnning recording
     }
 
     while(working_) {
-        if ((numbytes = recvfrom(sockfiledesc_[ii], recbufs_[ii], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << recport << endl;
             cerr << "Errno " << errno << endl;
@@ -289,16 +298,16 @@ void GPUpool::ReceiveData(int recport)
         }
         if (numbytes == 0)
             continue;
-        refsecond = (int)(recbufs_[ii][3] | (recbufs_[ii][2] << 8) | (recbufs_[ii][1] << 16) | ((recbufs_[ii][0] & 0x3f) << 24));
-        frameno = (int)(recbufs_[ii][7] | (recbufs_[ii][6] << 8) | (recbufs_[ii][5] << 16);
+        refsecond = (int)(recbufs_[portid][3] | (recbufs_[portid][2] << 8) | (recbufs_[portid][1] << 16) | ((recbufs_[portid][0] & 0x3f) << 24));
+        frameno = (int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
         frameno = frameno + (refsecond - starttime_.startsecond - 1) / 1 * 4000; //running tally of total frames (1 pol) subtract 1 because you skip the first second as it prob. didn't start recording on frame zero
 
         // looking at how much stuff we are not missing - remove a lot of checking for now
         // TODO: add some mininal checks later anyway
-        bufidx = (((int)frameno / accumulate_) % nostream) * accumulate_) + (frameno % accumulate_);
-        frametimes[bufidx] = frameno;
-        std::copy(recbufs[ii] + HEADER, recbufs[ii] + BUFLEN, h_pol[polid_] + (BUFLEN - HEADER) * bufidx)//copy data
-        bufidxarray[bufidx] = true;
+        bufidx = (((int)frameno / accumulate_) % nostreams_) * accumulate_ + (frameno % accumulate_);
+        // frametimes[bufidx] = frameno;
+        //std::copy(recbufs[portid] + HEADER, recbufs_[portid] + BUFLEN, h_pol_[polid_] + (BUFLEN - HEADER) * bufidx)//copy data
+        //bufidxarray[bufidx] = true;
         //}
     }
 }
