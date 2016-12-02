@@ -54,11 +54,8 @@ using std::thread;
 using std::unique_ptr;
 using std::vector;
 
-#define BYTES_PER_WORD 8
-#define HEADER 64
-#define WORDS_PER_PACKET 896
+#define HEADER 32
 #define BUFLEN 8000
-#define PORTS 8
 
 mutex cout_guard;
 
@@ -97,6 +94,7 @@ bool GPUpool::working_ = true;
 
 GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             gpuid_(config.gpuids[id]),
+                                            nopols_(config.npol),
                                             nostreams_(config.streamno),
                                             poolid_(id),
                                             ports_(config.ports[id]),
@@ -118,7 +116,12 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
     }
 }
 
-void GPUpool::execute(void)
+GPUpool::~GPUpool(void)
+{
+
+}
+
+void GPUpool::Execute(void)
 {
 
     noports_ = ports_.size();
@@ -147,6 +150,23 @@ void GPUpool::execute(void)
     // STAGE: memory
     if (verbose_)
         cout << "Initialising the memory..." << endl;
+
+    hdinpol_ = new unsigned char*[nopols_];
+    hdunpacked_ = new float*[nopols_];
+    cudaCheckError(cudaHostAlloc((void**)&inpol_, nopols_ * sizeof(unsigned char*), cudaHostAllocDefault));
+
+    for (int ipol = 0; ipol < nopols_; ipol++) {
+        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolsize_ * sizeof(unsigned char), cudaHostAllocDefault));
+        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolsize_ * sizeof(unsigned char)));
+        cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));      // remember we are unpacking to float
+
+    }
+
+    cudaCheckError(cudaMalloc((void**)&dinpol_, nopols_ * sizeof(unsigned char*)));
+    cudaCheckError(cudaMemcpy(dinpol_, hdinpol_, nopols_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
+
+    cudaCheckError(cudaMalloc((void**)&dunpacked_, nopols_ * sizeof(float*)));
+    cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, nopols_ * sizeof(float*), cudaMemcpyHostToDevice));
 
     // STAGE: networking
     if (verbose_)
@@ -221,12 +241,14 @@ void GPUpool::execute(void)
 
 }
 
-GPUpool::~GPUpool(void)
+void GPUpool::DoGpuWork(int stream)
 {
+
 
 }
 
-void GPUpool::HandleSignal(int signum) {
+void GPUpool::HandleSignal(int signum)
+{
 
     cout << "Captured the signal\nWill now terminate!\n";
     working_ = false;
@@ -237,6 +259,7 @@ void GPUpool::ReceiveData(int portid, int recport)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     // TODO: need to test how much we can squeeze out of the single core
+    // might depend on portid if can't pack everything in one core
     CPU_SET((int)(poolid_) * 3, &cpuset);
     // TODO: pass the thread ID properly
     int retaff = pthread_setaffinity_np(receivethreads_[portid].native_handle(), sizeof(cpu_set_t), &cpuset);

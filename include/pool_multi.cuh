@@ -77,16 +77,26 @@ class GPUpool
 
         ObsTime starttime_;
 
+        // unpacking into float for FFT purposes
+        float **dunpacked_;
+        float **hdunpacked_;
+
+        unsigned char **dinpol_;
+        unsigned char **hdinpol_;
         unsigned char **inpol_;
         unsigned char **recbufs_;
 
         unsigned int accumulate_;
         unsigned int availthreads_;
         unsigned int gpuid_;
+        unsigned int inbits;
+        unsigned int inpolsize_;
+        unsigned int nopols_;
         unsigned int noports_;
         unsigned int nostreams_;
         unsigned int packperbuf_;
         unsigned int poolid_;
+        unsigned int unpackedsize_;
 
     protected:
 
@@ -157,7 +167,7 @@ class GPUpool
             Each thread is responsible for picking up the data from the queue (the thread yields if the is no data available), running the FFT and power, time scrunch and frequency scrunch kernels.
             After successfull kernel execution, writes to the main data buffer using write() Buffer method.
         */
-        void worker(int stream);
+        void DoGpuWork(int stream);
         //! Handler called from async_receive_from().
         /*! This function is responsible for handling the asynchronous receive on the socket.
             \param error error code

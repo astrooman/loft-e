@@ -2,13 +2,9 @@
 #define _H_PAFRB_KERNELS
 
 #include <cufft.h>
-__global__ void rearrange(cudaTextureObject_t texObj, cufftComplex * __restrict__ out);
-
-__global__ void rearrange2(cudaTextureObject_t texObj, cufftComplex * __restrict__ out, unsigned int acc);
+__global__ void Unpack(unsigned char *in, float *out, int perthread, int rem, size_t samples);
 
 __global__ void addtime(float *in, float *out, unsigned int jumpin, unsigned int jumpout, unsigned int factort);
-
-__global__ void addchannel(float *in, float *out, unsigned int jumpin, unsigned int jumpout, unsigned int factorc);
 
 __global__ void addchannel2(float* __restrict__ in, float** __restrict__ out, short nchans, size_t gulp, size_t totsize, short gulpno, unsigned int jumpin, unsigned int factorc, unsigned int framet, unsigned int acc);
 
@@ -26,5 +22,4 @@ __global__ void transpose(float* __restrict__ in, float* __restrict__ out, unsig
 
 __global__ void scale_factors(float *in, float **means, float **rstdevs, unsigned int nchans, unsigned int ntimes, int param);
 
-__global__ void bandpass();
 #endif

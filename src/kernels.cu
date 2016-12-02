@@ -10,41 +10,22 @@
 
 __device__ float fftfactor = 1.0/32.0 * 1.0/32.0;
 
-__global__ void rearrange(cudaTextureObject_t texObj, cufftComplex * __restrict__ out)
+__constant__ unsigned char kMask[] = {0x03, 0x0C, 0x30, 0xC0};
+
+__global__ void Unpack(unsigned char *in, float *out, int perthread, int rem, size_t samples)
 {
-    // this is currently the ugliest solution I can think of
-    // xidx is the channel number
-    int xidx = blockIdx.x * blockDim.x + threadIdx.x;
-    int yidx = blockIdx.y * 128;
-    int2 word;
-    //if ((xidx == 0) && (yidx == 0)) printf("In the rearrange kernel\n");
-    for (int sample = 0; sample < YSIZE; sample++) {
-         word = tex2D<int2>(texObj, xidx, yidx + sample);
-         printf("%i ", sample);
-         out[xidx * 128 + 7 * yidx + sample].x = static_cast<float>(static_cast<short>(((word.y & 0xff000000) >> 24) | ((word.y & 0xff0000) >> 8)));
-         out[xidx * 128 + 7 * yidx + sample].y = static_cast<float>(static_cast<short>(((word.y & 0xff00) >> 8) | ((word.y & 0xff) << 8)));
-         out[336 * 128 + xidx * 128 + 7 * yidx + sample].x = static_cast<float>(static_cast<short>(((word.x & 0xff000000) >> 24) | ((word.x & 0xff0000) >> 8)));
-         out[336 * 128 + xidx * 128 + 7 * yidx + sample].y = static_cast<float>(static_cast<short>(((word.x & 0xff00) >> 8) | ((word.x & 0xff) << 8)));
+    int idx = blockIdx.x * blockDim.x * perthread + threadsIdx.x;
+    int skip = blockDim.x;
+
+    // take care of the last block which might have to use less threads than the previous one
+    if ((blockIdx.x == (gridDim.x -1)) && (rem != 0)) {         s
+        skip = rem;
     }
-}
 
-__global__ void rearrange2(cudaTextureObject_t texObj, cufftComplex * __restrict__ out, unsigned int acc)
-{
-
-    int xidx = blockIdx.x * blockDim.x + threadIdx.x;
-    int yidx = blockIdx.y * 128;
-    int chanidx = threadIdx.x + blockIdx.y * 7;
-    int skip;
-    int2 word;
-
-    for (int ac = 0; ac < acc; ac++) {
-        skip = 336 * 128 * 2 * ac;
-        for (int sample = 0; sample < YSIZE; sample++) {
-            word = tex2D<int2>(texObj, xidx, yidx + ac * 48 * 128 + sample);
-            out[skip + chanidx * YSIZE * 2 + sample].x = static_cast<float>(static_cast<short>(((word.y & 0xff000000) >> 24) | ((word.y & 0xff0000) >> 8)));
-            out[skip + chanidx * YSIZE * 2 + sample].y = static_cast<float>(static_cast<short>(((word.y & 0xff00) >> 8) | ((word.y & 0xff) << 8)));
-            out[skip + chanidx * YSIZE * 2 + YSIZE + sample].x = static_cast<float>(static_cast<short>(((word.x & 0xff000000) >> 24) | ((word.x & 0xff0000) >> 8)));
-            out[skip + chanidx * YSIZE * 2 + YSIZE + sample].y = static_cast<float>(static_cast<short>(((word.x & 0xff00) >> 8) | ((word.x & 0xff) << 8)));
+    for (int ii = 0; ii < perthread; ii++) {
+        // for now I will just assume 2-bit data
+        for (int jj = 0; jj < 4; jj++) {
+            out[(idx + ii * skip) * 4 + jj] = static_cast<float>(static_cast<short((in[idx + ii * skip] & kMask[jj]) >> 2 * jj));
         }
     }
 }
@@ -180,7 +161,7 @@ __global__ void addchanscale(float* __restrict__ in, float** __restrict__ out, s
     // thats the starting save position for the chunk of length acc time samples
     int saveidx;
 
-    
+
 
     int inskip;
 
