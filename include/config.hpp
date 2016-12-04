@@ -38,9 +38,12 @@ struct InConfig {
     unsigned int filchans;      // number fo filterbank channels
     unsigned int freqavg;          // number of frequency channels to average
     unsigned int gulp;
+    unsigned int headlen;
+    unsigned int inbits;
     unsigned int nchans;        // number of 1MHz channels
     unsigned int ngpus;         // number of GPUs to use
     unsigned int npol;
+    unsigned int vdiflen;   // length in bytes of the single VDIF packed excluding header
     unsigned int port;
     unsigned int stokes;        // number of Stokes parameters to output
     unsigned int streamno;      // number of CUDA streams for filterbanking

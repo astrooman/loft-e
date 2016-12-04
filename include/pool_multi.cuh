@@ -66,10 +66,14 @@ class GPUpool
 
         std::vector<int> ports_;
         std::vector<std::string> strip_;
+        std::vector<std::thread> gputhreads_;
         std::vector<std::thread> receivethreads_;
 
         bool verbose_;
         static bool working_;
+
+        const unsigned int headlen_;
+        const unsigned int vdiflen_;
 
         InConfig config_;
 
@@ -77,25 +81,40 @@ class GPUpool
 
         ObsTime starttime_;
 
+        cufftComplex **dfft_;
+        cufftComplex **hdfft_;
+
         // unpacking into float for FFT purposes
         float **dunpacked_;
+        float **dpower_;
         float **hdunpacked_;
+        float **hdpower_;
 
         unsigned char **dinpol_;
         unsigned char **hdinpol_;
         unsigned char **inpol_;
         unsigned char **recbufs_;
 
+        // TODO: this should really be template-like - we may choose to scale to different number of bits
+        unsigned char **dscaled_;
+        unsigned char **hdscaled_;
+
         unsigned int accumulate_;
         unsigned int availthreads_;
+        unsigned int avgfreq_;
+        unsigned int avgtime_;
         unsigned int gpuid_;
-        unsigned int inbits;
-        unsigned int inpolsize_;
+        unsigned int inbits_;
+        unsigned int inpolbufsize_;
+        unsigned int inpolgpusize_;
         unsigned int nopols_;
         unsigned int noports_;
+        unsigned int nostokes_;
         unsigned int nostreams_;
         unsigned int packperbuf_;
         unsigned int poolid_;
+        unsigned int powersize_;
+        unsigned int scaledsize_;
         unsigned int unpackedsize_;
 
     protected:
@@ -149,7 +168,7 @@ class GPUpool
         /*! Responsible for setting up the GPU execution.
             All memory allocated here, streams, cuFFT plans threads created here as well.
         */
-        void execute(void);
+        void Initialise(void);
         //! Reads the data from the UDP packet.
         /*!
             \param *data buffer read by async_receive_from()

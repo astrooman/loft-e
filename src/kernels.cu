@@ -14,18 +14,18 @@ __constant__ unsigned char kMask[] = {0x03, 0x0C, 0x30, 0xC0};
 
 __global__ void Unpack(unsigned char *in, float *out, int perthread, int rem, size_t samples)
 {
-    int idx = blockIdx.x * blockDim.x * perthread + threadsIdx.x;
+    int idx = blockIdx.x * blockDim.x * perthread + threadIdx.x;
     int skip = blockDim.x;
 
     // take care of the last block which might have to use less threads than the previous one
-    if ((blockIdx.x == (gridDim.x -1)) && (rem != 0)) {         s
+    if ((blockIdx.x == (gridDim.x -1)) && (rem != 0)) {
         skip = rem;
     }
 
     for (int ii = 0; ii < perthread; ii++) {
         // for now I will just assume 2-bit data
         for (int jj = 0; jj < 4; jj++) {
-            out[(idx + ii * skip) * 4 + jj] = static_cast<float>(static_cast<short((in[idx + ii * skip] & kMask[jj]) >> 2 * jj));
+            out[(idx + ii * skip) * 4 + jj] = static_cast<float>(static_cast<short>((in[idx + ii * skip] & kMask[jj]) >> 2 * jj));
         }
     }
 }

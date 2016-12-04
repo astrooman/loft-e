@@ -55,7 +55,6 @@ using std::unique_ptr;
 using std::vector;
 
 #define HEADER 32
-#define BUFLEN 8000
 
 mutex cout_guard;
 
@@ -77,7 +76,7 @@ Oberpool::Oberpool(InConfig config) : ngpus(config.ngpus)
     }
 
     for (int ii = 0; ii < ngpus; ii++) {
-        threadvector.push_back(thread(&GPUpool::execute, std::move(gpuvector[ii])));
+        threadvector.push_back(thread(&GPUpool::Initialise, std::move(gpuvector[ii])));
     }
 
 }
@@ -93,12 +92,17 @@ Oberpool::~Oberpool(void)
 bool GPUpool::working_ = true;
 
 GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
+                                            avgfreq_(config.freqavg),
+                                            avgtime_(config.timesavg),
                                             gpuid_(config.gpuids[id]),
+                                            headlen_(config.headlen),
+                                            inbits_(config.inbits),
                                             nopols_(config.npol),
+                                            nostokes_(config.stokes),
                                             nostreams_(config.streamno),
                                             poolid_(id),
                                             ports_(config.ports[id]),
-                                            // strip_(config.ips[id]),
+                                            vdiflen_(config.vdiflen),
                                             verbose_(config.verbose)
 
 
@@ -118,10 +122,33 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
 
 GPUpool::~GPUpool(void)
 {
+    cudaCheckError(cudaFree(dscaled_));
+    cudaCheckError(cudaFree(dpower_));
 
+    for (int istoke = 0; istoke < nostokes_; istoke++) {
+        cudaCheckError(cudaFree(hdscaled_[istoke]));
+        cudaCheckError(cudaFree(hdpower_[istoke]));
+    }
+
+    cudaCheckError(cudaFree(dfft_));
+    cudaCheckError(cudaFree(dunpacked_));
+    cudaCheckError(cudaFree(dinpol_));
+
+    for (int ipol = 0; ipol < nopols_; ipol++) {
+        cudaCheckError(cudaFree(hdunpacked_));
+        cudaCheckError(cudaFree(hdinpol_[ipol]));
+        cudaCheckError(cudaFreeHost(inpol_[ipol]));
+    }
+
+    cudaCheckError(cudaFreeHost(inpol_));
+
+    delete [] hdscaled_;
+    delete [] hdpower_;
+    delete [] hdunpacked_;
+    delete [] hdinpol_;
 }
 
-void GPUpool::Execute(void)
+void GPUpool::Initialise(void)
 {
 
     noports_ = ports_.size();
@@ -151,15 +178,24 @@ void GPUpool::Execute(void)
     if (verbose_)
         cout << "Initialising the memory..." << endl;
 
+    inpolbufsize_ = 2 * accumulate_ * vdiflen_;
+    inpolgpusize_ = accumulate_ * vdiflen_ * nostreams_;
+    int unpackfactor = 8 / inbits_;
+    unpackedsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
+    powersize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
+    // averaging will happen in either power or scale kernel - will be decided later
+    scaledsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor / avgfreq_ / avgtime_;
+
     hdinpol_ = new unsigned char*[nopols_];
     hdunpacked_ = new float*[nopols_];
+    hdpower_ = new float*[nostokes_];
+    hdscaled_ = new unsigned char*[nostokes_];
     cudaCheckError(cudaHostAlloc((void**)&inpol_, nopols_ * sizeof(unsigned char*), cudaHostAllocDefault));
 
     for (int ipol = 0; ipol < nopols_; ipol++) {
-        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolsize_ * sizeof(unsigned char), cudaHostAllocDefault));
-        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolsize_ * sizeof(unsigned char)));
+        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolbufsize_ * sizeof(unsigned char), cudaHostAllocDefault));
+        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolgpusize_ * sizeof(unsigned char)));
         cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));      // remember we are unpacking to float
-
     }
 
     cudaCheckError(cudaMalloc((void**)&dinpol_, nopols_ * sizeof(unsigned char*)));
@@ -167,6 +203,26 @@ void GPUpool::Execute(void)
 
     cudaCheckError(cudaMalloc((void**)&dunpacked_, nopols_ * sizeof(float*)));
     cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, nopols_ * sizeof(float*), cudaMemcpyHostToDevice));
+
+    cudaCheckError(cudaMalloc((void**)&dfft_, nopols_ * sizeof(cufftComplex*)));
+    cudaCheckError(cudaMemcpy(dfft_, hdfft_, nopols_ * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
+
+    for (int istoke = 0; istoke < nostokes_; istoke++) {
+        cudaCheckError(cudaMalloc((void**)&hdpower_[istoke], powersize_ * sizeof(float)));
+        // TODO: this should really be template-like - we may choose to scale to different number of bits
+        cudaCheckError(cudaMalloc((void**)&hdscaled_[istoke], scaledsize_ * sizeof(unsigned char)));
+    }
+
+    cudaCheckError(cudaMalloc((void**)&dpower_, nostokes_ * sizeof(float*)));
+    cudaCheckError(cudaMemcpy(dpower_, hdpower_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
+
+    cudaCheckError(cudaMalloc((void**)&dscaled_, nostokes_ * sizeof(unsigned char*)));
+    cudaCheckError(cudaMemcpy(dscaled_, hdscaled_, nostokes_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
+
+    // STAGE: launch GPU work
+    for (int igstream = 0; igstream < nostreams_; igstream++) {
+        gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
+    }
 
     // STAGE: networking
     if (verbose_)
@@ -183,7 +239,7 @@ void GPUpool::Execute(void)
     recbufs_ = new unsigned char*[noports_];
 
     for (int iport = 0; iport < noports_; iport++)
-        recbufs_[iport] = new unsigned char[BUFLEN];
+        recbufs_[iport] = new unsigned char[vdiflen_ + headlen_];
 
     ostringstream ssport;
     string strport;
@@ -292,13 +348,13 @@ void GPUpool::ReceiveData(int portid, int recport)
     // TODO: be careful which port waits
     if (recport == ports_[0]) {
         unsigned char *tempbuf = recbufs_[0];
-        numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen);
+        numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen);
         starttime_.startepoch = (int)(tempbuf[4] & 0x3f);
         starttime_.startsecond = (int)(tempbuf[3] | (tempbuf[2] << 8) | (tempbuf[1] << 16) | ((tempbuf[0] & 0x3f) << 24));
     }
 
     while (true) {
-        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], vdiflen_ * headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << recport << endl;
             cerr << "Errno " << errno << endl;
@@ -313,7 +369,7 @@ void GPUpool::ReceiveData(int portid, int recport)
     }
 
     while(working_) {
-        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], BUFLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << recport << endl;
             cerr << "Errno " << errno << endl;
