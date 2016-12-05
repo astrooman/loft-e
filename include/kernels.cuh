@@ -2,7 +2,11 @@
 #define _H_PAFRB_KERNELS
 
 #include <cufft.h>
-__global__ void Unpack(unsigned char *in, float *out, int perthread, int rem, size_t samples);
+__global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples);
+
+__global__ void PowerKernel(cufftComplex **in, float **out);
+
+__global__ void ScaleKernel(float **in, unsigned char **out);
 
 __global__ void addtime(float *in, float *out, unsigned int jumpin, unsigned int jumpout, unsigned int factort);
 

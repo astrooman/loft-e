@@ -64,6 +64,9 @@ class GPUpool
 {
     private:
 
+        // TODO: this should really be template-like - we may choose to scale to different number of bits
+        std::unique_ptr<Buffer<unsigned char>> filbuffer_;
+
         std::vector<int> ports_;
         std::vector<std::string> strip_;
         std::vector<std::thread> gputhreads_;
@@ -75,8 +78,13 @@ class GPUpool
         const unsigned int headlen_;
         const unsigned int vdiflen_;
 
+        cudaStream_t *gpustreams_;
+        cufftHandle *fftplans_;
+
+
         InConfig config_;
 
+        int *fftsizes_;
         int *sockfiledesc_;
 
         ObsTime starttime_;
@@ -94,15 +102,19 @@ class GPUpool
         unsigned char **hdinpol_;
         unsigned char **inpol_;
         unsigned char **recbufs_;
-
         // TODO: this should really be template-like - we may choose to scale to different number of bits
         unsigned char **dscaled_;
         unsigned char **hdscaled_;
+
+        unsigned int *cudablocks_;
+        unsigned int *cudathreads_;
 
         unsigned int accumulate_;
         unsigned int availthreads_;
         unsigned int avgfreq_;
         unsigned int avgtime_;
+        unsigned int fftbatchsize_;
+        unsigned int fftpoints_;
         unsigned int gpuid_;
         unsigned int inbits_;
         unsigned int inpolbufsize_;
@@ -114,6 +126,8 @@ class GPUpool
         unsigned int packperbuf_;
         unsigned int poolid_;
         unsigned int powersize_;
+        unsigned int rem_;
+        unsigned int sampperthread_;
         unsigned int scaledsize_;
         unsigned int unpackedsize_;
 

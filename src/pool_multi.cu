@@ -64,9 +64,22 @@ TODO: Too many copies - could I use move in certain places?
 
 /*####################################################
 IMPORTANT: from what I seen in the system files:
-There is only one NUMA note.
-6 (sic!) physical core, 12 if we really want to use HT
+There is only one NUMA node.
+6 (sic!) physical cores
 ####################################################*/
+
+int power2factor(unsigned int inbytes) {
+    if ((inbytes % 2) != 0)
+        return 1;      // don't even  bother with odd numbers
+
+    int factor = 4;
+
+    while ((inbytes % factor) == 0) {
+        factor *= 2;
+    }
+
+    return factor / 2;
+};
 
 Oberpool::Oberpool(InConfig config) : ngpus(config.ngpus)
 {
@@ -94,6 +107,7 @@ bool GPUpool::working_ = true;
 GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             avgfreq_(config.freqavg),
                                             avgtime_(config.timesavg),
+                                            fftpoints_(config.fftsize),
                                             gpuid_(config.gpuids[id]),
                                             headlen_(config.headlen),
                                             inbits_(config.inbits),
@@ -122,6 +136,8 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
 
 GPUpool::~GPUpool(void)
 {
+    // TODO: join the processing threads
+
     cudaCheckError(cudaFree(dscaled_));
     cudaCheckError(cudaFree(dpower_));
 
@@ -219,7 +235,38 @@ void GPUpool::Initialise(void)
     cudaCheckError(cudaMalloc((void**)&dscaled_, nostokes_ * sizeof(unsigned char*)));
     cudaCheckError(cudaMemcpy(dscaled_, hdscaled_, nostokes_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
 
-    // STAGE: launch GPU work
+    // TODO: this should really be template-like - we may choose to scale to different number of bits
+    filbuffer_ = unique_ptr<Buffer<unsigned char>>(new Buffer<unsigned char>(gpuid_));
+
+    // STAGE: prepare and launch GPU work
+    if (verbose_)
+        cout << "Launching the GPU..." << endl;
+
+    gpustreams_ = new cudaStream_t[nostreams_];
+    fftplans_ = new cufftHandle[nostreams_];
+    fftsizes_ = new int[1];
+    fftsizes_[0] = fftpoints_;
+
+
+    for (int igstream = 0; igstream < nostreams_; igstream++) {
+        cudaCheckError(cudaStreamCreate(&gpustreams_[igstream]));
+        cufftCheckError(cufftPlanMany(&fftplans_[igstream], 1, fftsizes_, NULL, 1, fftpoints_, NULL, 1, fftpoints_, CUFFT_R2C, fftbatchsize_));
+        cufftCheckError(cufftSetStream(fftplans_[igstream], gpustreams_[igstream]));
+    }
+
+    int nokernels = 3;  // unpack, power and scale
+    cudablocks_ = new unsigned int[nokernels];
+    cudathreads_ = new unsigned int[nokernels];
+
+    // currently limit set to 1024, but can be lowered down, depending on the results of the tests
+    sampperthread_ = min(power2factor(accumulate_ * vdiflen_), 1024);
+    int needthreads = accumulate_ * vdiflen_ / sampperthread_;
+    cudathreads_[0] = min(needthreads, 1024);
+    int needblocks = needthreads / cudathreads_[0];
+    cudablocks_[0] = min(needblocks, 65536);
+
+    rem_ = needthreads - cudablocks_[0] * cudathreads_[0];
+
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
     }
@@ -244,7 +291,6 @@ void GPUpool::Initialise(void)
     ostringstream ssport;
     string strport;
 
-    // all the magic happens here
     for (int iport = 0; iport < noports_; iport++) {
         ssport.str("");
         ssport << ports_[iport];
@@ -299,6 +345,38 @@ void GPUpool::Initialise(void)
 
 void GPUpool::DoGpuWork(int stream)
 {
+    // let us hope one stream will be enough or we will have to squeeze multiple streams into single CPU core
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET((int)gpuid_ * 3 + 1, &cpuset);
+
+    int retaff = pthread_setaffinity_np(gputhreads_[stream].native_handle(), sizeof(cpu_set_t), &cpuset);
+
+    if (retaff != 0) {
+        cerr << "Error setting thread affinity for the GPU processing, stream " << stream << endl;
+    }
+
+    if (verbose_) {
+        cout_guard.lock();
+        cout << "Starting worker " << gpuid_ << ":" << stream << " on CPU " << sched_getcpu() << endl;
+        cout_guard.unlock();
+    }
+
+    cudaCheckError(cudaSetDevice(gpuid_));
+
+    while (working_) {
+
+        for (int ipol = 0; ipol < nopols_; ipol++) {
+            cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol], inpol_[ipol], accumulate_ * vdiflen_, cudaMemcpyHostToDevice, gpustreams_[stream]));
+        }
+
+        UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_);
+        // TODO: test - will cufft handle a 2D array? like dunpacked_?
+        // cufftCheckError(cufftExecR2C(fftplans_[stream], dunpacked_, dfft_, CUFFT_FORWARD));
+        PowerKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dpower_);
+        ScaleKernel<<<cudablocks_[2], cudathreads_[2], 0, gpustreams_[stream]>>>(dpower_, dscaled_);
+
+    }
 
 
 }
@@ -342,6 +420,7 @@ void GPUpool::ReceiveData(int portid, int recport)
     // this will always be an integer
     int frameno{0};
     int refsecond{0};
+    // thread ID is used to distinguish between polarisations
     int threadid{0};
     int packcount{0};
 
@@ -377,15 +456,12 @@ void GPUpool::ReceiveData(int portid, int recport)
         }
         if (numbytes == 0)
             continue;
+        threadid = (int)(recbufs_[portid][13] | ((recbufs_[portid][12] & 0x02) << 8));
         refsecond = (int)(recbufs_[portid][3] | (recbufs_[portid][2] << 8) | (recbufs_[portid][1] << 16) | ((recbufs_[portid][0] & 0x3f) << 24));
         frameno = (int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
-        frameno = frameno + (refsecond - starttime_.startsecond - 1) / 1 * 4000; //running tally of total frames (1 pol) subtract 1 because you skip the first second as it prob. didn't start recording on frame zero
-
-        // looking at how much stuff we are not missing - remove a lot of checking for now
-        // TODO: add some mininal checks later anyway
         bufidx = (((int)frameno / accumulate_) % nostreams_) * accumulate_ + (frameno % accumulate_);
         // frametimes[bufidx] = frameno;
-        //std::copy(recbufs[portid] + HEADER, recbufs_[portid] + BUFLEN, h_pol_[polid_] + (BUFLEN - HEADER) * bufidx)//copy data
+        std::copy(recbufs_[portid] + headlen_, recbufs_[portid] + headlen_ + vdiflen_, inpol_[threadid] + vdiflen_ * bufidx);
         //bufidxarray[bufidx] = true;
         //}
     }
