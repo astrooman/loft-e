@@ -84,6 +84,8 @@ class GPUpool
 
         InConfig config_;
 
+        bool *readybufidx_;
+
         int *fftsizes_;
         int *sockfiledesc_;
 
@@ -108,6 +110,8 @@ class GPUpool
 
         unsigned int *cudablocks_;
         unsigned int *cudathreads_;
+        unsigned int *framenumbers_;
+
 
         unsigned int accumulate_;
         unsigned int availthreads_;
@@ -115,6 +119,7 @@ class GPUpool
         unsigned int avgtime_;
         unsigned int fftbatchsize_;
         unsigned int fftpoints_;
+        unsigned int fftsize_;
         unsigned int gpuid_;
         unsigned int inbits_;
         unsigned int inpolbufsize_;

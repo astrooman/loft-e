@@ -15,7 +15,6 @@
 #include <boost/bind.hpp>
 #include <cufft.h>
 #include <cuda.h>
-#include <numa.h>
 #include <pthread.h>
 #include <thrust/device_vector.h>
 
@@ -116,6 +115,7 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             nostreams_(config.streamno),
                                             poolid_(id),
                                             ports_(config.ports[id]),
+                                            strip_(config.ips),
                                             vdiflen_(config.vdiflen),
                                             verbose_(config.verbose)
 
@@ -137,6 +137,14 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
 GPUpool::~GPUpool(void)
 {
     // TODO: join the processing threads
+
+    for (int ithread = 0; ithread < receivethreads_.size(); ithread++) {
+        receivethreads_[ithread].join();
+    }
+
+    for (int ithread = 0; ithread < gputhreads_.size(); ithread++) {
+        gputhreads_[ithread].join();
+    }
 
     cudaCheckError(cudaFree(dscaled_));
     cudaCheckError(cudaFree(dpower_));
@@ -162,6 +170,8 @@ GPUpool::~GPUpool(void)
     delete [] hdpower_;
     delete [] hdunpacked_;
     delete [] hdinpol_;
+    delete [] framenumbers_;
+    delete [] readybufidx_;
 }
 
 void GPUpool::Initialise(void)
@@ -194,24 +204,33 @@ void GPUpool::Initialise(void)
     if (verbose_)
         cout << "Initialising the memory..." << endl;
 
-    inpolbufsize_ = 2 * accumulate_ * vdiflen_;
+
+    inpolbufsize_ = 2 * accumulate_ * vdiflen_ * nostreams_;		// 2 * to hold two buffers side by side
     inpolgpusize_ = accumulate_ * vdiflen_ * nostreams_;
     int unpackfactor = 8 / inbits_;
     unpackedsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
+    fftsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
     powersize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
     // averaging will happen in either power or scale kernel - will be decided later
     scaledsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor / avgfreq_ / avgtime_;
 
+    readybufidx_ = new bool[inpolbufsize_];
+    framenumbers_ = new unsigned int[inpolbufsize_];
+
     hdinpol_ = new unsigned char*[nopols_];
     hdunpacked_ = new float*[nopols_];
+    hdfft_ = new cufftComplex*[nopols_];
     hdpower_ = new float*[nostokes_];
     hdscaled_ = new unsigned char*[nostokes_];
     cudaCheckError(cudaHostAlloc((void**)&inpol_, nopols_ * sizeof(unsigned char*), cudaHostAllocDefault));
+
+    cout << sizeof(cufftComplex) << endl;
 
     for (int ipol = 0; ipol < nopols_; ipol++) {
         cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolbufsize_ * sizeof(unsigned char), cudaHostAllocDefault));
         cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolgpusize_ * sizeof(unsigned char)));
         cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));      // remember we are unpacking to float
+        cudaCheckError(cudaMalloc((void**)&hdfft_[ipol], fftsize_ * sizeof(cufftComplex)));
     }
 
     cudaCheckError(cudaMalloc((void**)&dinpol_, nopols_ * sizeof(unsigned char*)));
@@ -246,7 +265,9 @@ void GPUpool::Initialise(void)
     fftplans_ = new cufftHandle[nostreams_];
     fftsizes_ = new int[1];
     fftsizes_[0] = fftpoints_;
+    fftbatchsize_ = fftsize_ / fftsizes_[0];
 
+    cout << fftsizes_[0] << " " << fftsize_ << " " << fftbatchsize_ << endl;
 
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         cudaCheckError(cudaStreamCreate(&gpustreams_[igstream]));
@@ -282,8 +303,13 @@ void GPUpool::Initialise(void)
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE;
 
+    cout << noports_ << endl;
+
     sockfiledesc_ = new int[noports_];
     recbufs_ = new unsigned char*[noports_];
+
+    cout << strip_[0] << endl;
+    cout << vdiflen_ << " " << headlen_ << endl;
 
     for (int iport = 0; iport < noports_; iport++)
         recbufs_[iport] = new unsigned char[vdiflen_ + headlen_];
@@ -292,9 +318,15 @@ void GPUpool::Initialise(void)
     string strport;
 
     for (int iport = 0; iport < noports_; iport++) {
+        cout << strip_[iport] << endl;
+        cout << strip_[iport].c_str() << endl;
+        cout.flush();
         ssport.str("");
         ssport << ports_[iport];
         strport = ssport.str();
+
+        cout << strip_[iport] << endl;
+        cout << strip_[iport].c_str() << endl;
 
         if((netrv = getaddrinfo(strip_[iport].c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
             cout_guard.lock();
@@ -418,7 +450,7 @@ void GPUpool::ReceiveData(int portid, int recport)
     int numbytes{0};
     short bufidx{0};
     // this will always be an integer
-    int frameno{0};
+    unsigned int frameno{0};
     int refsecond{0};
     // thread ID is used to distinguish between polarisations
     int threadid{0};
@@ -432,7 +464,7 @@ void GPUpool::ReceiveData(int portid, int recport)
         starttime_.startsecond = (int)(tempbuf[3] | (tempbuf[2] << 8) | (tempbuf[1] << 16) | ((tempbuf[0] & 0x3f) << 24));
     }
 
-    while (true) {
+    while (working_) {
         if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], vdiflen_ * headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             cout_guard.lock();
             cerr << "Error of recvfrom on port " << recport << endl;
@@ -441,7 +473,9 @@ void GPUpool::ReceiveData(int portid, int recport)
         }
         if (numbytes == 0)
             continue;
-        frameno = (int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
+        frameno = (unsigned int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
+        cout << frameno << endl;
+        cout.flush();
         if (frameno == 0) {
             break;
         } // wait until reaching frame zero of next second before beginnning recording
@@ -458,11 +492,13 @@ void GPUpool::ReceiveData(int portid, int recport)
             continue;
         threadid = (int)(recbufs_[portid][13] | ((recbufs_[portid][12] & 0x02) << 8));
         refsecond = (int)(recbufs_[portid][3] | (recbufs_[portid][2] << 8) | (recbufs_[portid][1] << 16) | ((recbufs_[portid][0] & 0x3f) << 24));
-        frameno = (int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));
-        bufidx = (((int)frameno / accumulate_) % nostreams_) * accumulate_ + (frameno % accumulate_);
-        // frametimes[bufidx] = frameno;
-        std::copy(recbufs_[portid] + headlen_, recbufs_[portid] + headlen_ + vdiflen_, inpol_[threadid] + vdiflen_ * bufidx);
-        //bufidxarray[bufidx] = true;
+        frameno = (unsigned int)(recbufs_[portid][7] | (recbufs_[portid][6] << 8) | (recbufs_[portid][5] << 16));	// frame number in this second
+        frameno += (refsecond - starttime_.startsecond - 1) * 4000;	// absolute frame number
+        //bufidx = (((int)frameno / accumulate_) % nostreams_) * accumulate_ + (frameno % accumulate_);
+        bufidx = frameno % (inpolbufsize_ / vdiflen_);
+	framenumbers_[bufidx] = frameno;
+	std::copy(recbufs_[portid] + headlen_, recbufs_[portid] + headlen_ + vdiflen_, inpol_[threadid] + vdiflen_ * bufidx);
+        readybufidx_[bufidx] = true;
         //}
     }
 }

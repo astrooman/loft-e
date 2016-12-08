@@ -55,7 +55,7 @@ inline void default_config(InConfig &config) {
     config.test = false;
     config.verbose = false;
 
-    config.accumulate = 4000;
+    config.accumulate = 1000;
     config.band = 1.185;
     config.dstart = 0.0;
     config.dend = 4000.0;
@@ -70,6 +70,8 @@ inline void default_config(InConfig &config) {
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
     // TEST
     //config.nchans = 42;
+    config.headlen = 32;
+    config.inbits = 2;
     config.nchans = 336;
     config.ngpus = 1;
     config.npol = 2;
@@ -77,6 +79,7 @@ inline void default_config(InConfig &config) {
     config.stokes = 4;
     config.streamno = 4;
     config.timesavg = 4;
+    config.vdiflen = 8000;
 
     config.batch = config.nchans;
     config.filchans = config.nchans * 27 / config.freqavg;
