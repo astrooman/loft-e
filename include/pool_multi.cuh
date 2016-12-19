@@ -66,6 +66,7 @@ class GPUpool
 
         // TODO: this should really be template-like - we may choose to scale to different number of bits
         std::unique_ptr<Buffer<unsigned char>> filbuffer_;
+        std::unique_ptr<DedispPlan> dedispplan_;
 
         std::vector<int> ports_;
         std::vector<std::string> strip_;
@@ -74,31 +75,67 @@ class GPUpool
 
         bool verbose_;
         static bool working_;
+        bool scaled_;
 
         const unsigned int headlen_;
         const unsigned int vdiflen_;
 
-        cudaStream_t *gpustreams_;
-        cufftHandle *fftplans_;
-
+        double freqtop_;
+        double freqoff_;
 
         InConfig config_;
 
+        ObsTime starttime_;
+
+        unsigned int accumulate_;
+        unsigned int availthreads_;
+        unsigned int avgfreq_;
+        unsigned int avgtime_;
+        unsigned int dedispextrasamples_;
+        unsigned int dedispgulpsamples_;
+        unsigned int fftbatchsize_;
+        unsigned int fftpoints_;
+        unsigned int fftsize_;
+        unsigned int filchans_;
+        unsigned int gpuid_;
+        unsigned int inbits_;
+        unsigned int inpolbufsize_;
+        unsigned int inpolgpusize_;
+        unsigned int nogulps_;
+        unsigned int nopols_;
+        unsigned int noports_;
+        unsigned int nostokes_;
+        unsigned int nostreams_;
+        unsigned int packperbuf_;
+        unsigned int perblock_;
+        unsigned int poolid_;
+        unsigned int powersize_;
+        unsigned int rem_;
+        unsigned int sampperthread_;
+        unsigned int scaledsize_;
+        unsigned int unpackedsize_;
+
         bool *readybufidx_;
 
-        int *fftsizes_;
-        int *sockfiledesc_;
-
-        ObsTime starttime_;
+        cudaStream_t dedispstream_;
+        cudaStream_t *gpustreams_;
 
         cufftComplex **dfft_;
         cufftComplex **hdfft_;
+        cufftHandle *fftplans_;
 
         // unpacking into float for FFT purposes
+        float **dmeans_;
+        float **dstdevs_;
+        float **hdmeans_;
+        float **hdstdevs_;
         float **dunpacked_;
         float **dpower_;
         float **hdunpacked_;
         float **hdpower_;
+
+        int *fftsizes_;
+        int *sockfiledesc_;
 
         unsigned char **dinpol_;
         unsigned char **hdinpol_;
@@ -111,30 +148,6 @@ class GPUpool
         unsigned int *cudablocks_;
         unsigned int *cudathreads_;
         unsigned int *framenumbers_;
-
-
-        unsigned int accumulate_;
-        unsigned int availthreads_;
-        unsigned int avgfreq_;
-        unsigned int avgtime_;
-        unsigned int fftbatchsize_;
-        unsigned int fftpoints_;
-        unsigned int fftsize_;
-        unsigned int gpuid_;
-        unsigned int inbits_;
-        unsigned int inpolbufsize_;
-        unsigned int inpolgpusize_;
-        unsigned int nopols_;
-        unsigned int noports_;
-        unsigned int nostokes_;
-        unsigned int nostreams_;
-        unsigned int packperbuf_;
-        unsigned int poolid_;
-        unsigned int powersize_;
-        unsigned int rem_;
-        unsigned int sampperthread_;
-        unsigned int scaledsize_;
-        unsigned int unpackedsize_;
 
     protected:
 
@@ -182,7 +195,7 @@ class GPUpool
             In the filterbank dump mode, responsible for initialising the dump (Buffer::dump() method).
             \param dstream stream number, used to access stream from mystreams array
         */
-        void dedisp_thread(int dstream);
+        void SendForDedispersion(int dstream);
         //! Main GPUpool method.
         /*! Responsible for setting up the GPU execution.
             All memory allocated here, streams, cuFFT plans threads created here as well.

@@ -6,6 +6,8 @@ __global__ void UnpackKernel(unsigned char **in, float **out, int pols, int pert
 
 __global__ void PowerKernel(cufftComplex **in, float **out);
 
+__global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs, int avgfreq, int avgtime, int nchans);
+
 __global__ void ScaleKernel(float **in, unsigned char **out);
 
 __global__ void addtime(float *in, float *out, unsigned int jumpin, unsigned int jumpout, unsigned int factort);

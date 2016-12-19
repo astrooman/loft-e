@@ -82,7 +82,6 @@ inline void default_config(InConfig &config) {
     config.vdiflen = 8000;
 
     config.batch = config.nchans;
-    config.filchans = config.nchans * 27 / config.freqavg;
     config.tsamp = (double)1.0 / (config.band * 1e+06) * 32 * (double)config.timesavg;
     for (int ii = 0; ii < config.filchans; ii++)
          (config.killmask).push_back((int)1);
