@@ -2,11 +2,16 @@
 #define _H_PAFRB_KERNELS
 
 #include <cufft.h>
-__global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples);
+__global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples, int unpack);
 
 __global__ void PowerKernel(cufftComplex **in, float **out);
 
-__global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs, int avgfreq, int avgtime, int nchans);
+//__global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs, int avgfreq, int avgtime, int nchans);
+
+__global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs,
+                                    int avgfreq, int avgtime, int nchans, int outsampperblock,
+                                    int inskip, int nogulps, int gulpsize, int extra, unsigned int framet,
+                                    unsigned int perframe);
 
 __global__ void ScaleKernel(float **in, unsigned char **out);
 

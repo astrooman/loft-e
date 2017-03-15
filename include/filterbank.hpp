@@ -196,7 +196,8 @@ inline void save_filterbank(float **ph_filterbank, size_t nsamps, size_t start, 
     }
 }
 
-inline void save_filterbank2(float *ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string outdir)
+template<class T>
+inline void SaveFilterbank(T **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string outdir)
 {
 
     std::ostringstream oss;
@@ -343,8 +344,9 @@ inline void save_filterbank2(float *ph_filterbank, size_t nsamps, size_t start, 
             outfile.write(field, length * sizeof(char));
 
             size_t to_save = nsamps * head.nchans * head.nbits / 8;
-            //float *ph_filsave = ph_filterbank[ii];
-            outfile.write(reinterpret_cast<char*>(&ph_filterbank[start + ii * nsamps * head.nchans]), to_save);
+            T *ph_filsave = ph_filterbank[ii];
+            outfile.write(reinterpret_cast<char*>(&ph_filsave[start]), to_save);
+            //outfile.write(reinterpret_cast<char*>(&ph_filterbank[start + ii * nsamps * head.nchans]), to_save);
 
         } else {
             std::cerr << "Problems with saving the filterbank file" << std::endl;

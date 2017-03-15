@@ -82,6 +82,7 @@ class GPUpool
 
         double freqtop_;
         double freqoff_;
+        double samptime_;
 
         InConfig config_;
 
@@ -195,7 +196,7 @@ class GPUpool
             In the filterbank dump mode, responsible for initialising the dump (Buffer::dump() method).
             \param dstream stream number, used to access stream from mystreams array
         */
-        void SendForDedispersion(int dstream);
+        void SendForDedispersion(cudaStream_t dstream);
         //! Main GPUpool method.
         /*! Responsible for setting up the GPU execution.
             All memory allocated here, streams, cuFFT plans threads created here as well.

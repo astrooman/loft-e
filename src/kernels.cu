@@ -26,7 +26,7 @@ __global__ void UnpackKernel(unsigned char **in, float **out, int pols, int pert
         for (int ipol = 0; ipol < pols; ipol++) {
             for (int isamp = 0; isamp < perthread; isamp++) {
                 for (int ipack = 0; ipack < unpack; ipack++) {
-                    out[ipol][(idx + isamp * skip) * unpack + ipack] = static_cast<float>(static_cast<short>((in[idx + isamp * skip] & kMask[ipack]) >> ( 2 * ipack)));
+                    out[ipol][(idx + isamp * skip) * unpack + ipack] = static_cast<float>(static_cast<short>((in[ipol][idx + isamp * skip] & kMask[ipack]) >> ( 2 * ipack)));
                 }
             }
         }
@@ -80,7 +80,7 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
 
 
     for (int ichunk = 0; ichunk < outsampperblock; ichunk++) {
-        filtimeidx = framet * perframe + blockIdx.x * perblock + ichunk;
+        filtimeidx = framet * perframe + blockIdx.x * outsampperblock + ichunk;
         outidx = filtimeidx * nchans + threadIdx.x;
         for (int isamp = 0; isamp < avgtime; isamp++) {
             for (int ifreq = 0; ifreq < avgfreq; ifreq++) {
@@ -98,10 +98,10 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
         out[3][outidx] = (out[3][outidx] - means[3][threadIdx.x]) / stdevs[3][threadIdx.x] * 32.0 + 64.0;
 
         if (filtimeidx < extra) {
-            out[0][outidx + nogulps * gulp * nchans] = out[0][outidx];
-            out[1][outidx + nogulps * gulp * nchans] = out[1][outidx];
-            out[2][outidx + nogulps * gulp * nchans] = out[2][outidx];
-            out[3][outidx + nogulps * gulp * nchans] = out[3][outidx];
+            out[0][outidx + nogulps * gulpsize * nchans] = out[0][outidx];
+            out[1][outidx + nogulps * gulpsize * nchans] = out[1][outidx];
+            out[2][outidx + nogulps * gulpsize * nchans] = out[2][outidx];
+            out[3][outidx + nogulps * gulpsize * nchans] = out[3][outidx];
         }
     }
 }
@@ -111,10 +111,10 @@ __global__ void ScaleKernel(float **in, unsigned char **out, float **means, floa
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     // TODO: remember to save filterbank in two places where necessary
-    out[0][idx] = (in[0][idx] - means[0]) / stdevs[0][idx] * 32.0 + 64.0;
-    out[1][idx] = (in[1][idx] - means[1]) / stdevs[1][idx] * 32.0 + 64.0;
-    out[0][idx] = (in[2][idx] - means[2]) / stdevs[2][idx] * 32.0 + 64.0;
-    out[0][idx] = (in[3][idx] - means[3]) / stdevs[3][idx] * 32.0 + 64.0;
+    out[0][idx] = (in[0][idx] - means[0][idx]) / stdevs[0][idx] * 32.0 + 64.0;
+    out[1][idx] = (in[1][idx] - means[1][idx]) / stdevs[1][idx] * 32.0 + 64.0;
+    out[0][idx] = (in[2][idx] - means[2][idx]) / stdevs[2][idx] * 32.0 + 64.0;
+    out[0][idx] = (in[3][idx] - means[3][idx]) / stdevs[3][idx] * 32.0 + 64.0;
 }
 
 __global__ void addchannel2(float* __restrict__ in, float** __restrict__ out, short nchans, size_t gulp, size_t totsize,  short gulpno, unsigned int jumpin, unsigned int factorc, unsigned int framet, unsigned int acc) {

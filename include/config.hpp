@@ -55,7 +55,7 @@ inline void default_config(InConfig &config) {
     config.test = false;
     config.verbose = false;
 
-    config.accumulate = 1000;
+    config.accumulate = 1024;
     config.band = 1.185;
     config.dstart = 0.0;
     config.dend = 4000.0;
@@ -63,22 +63,17 @@ inline void default_config(InConfig &config) {
 
     config.beamno = 1;
     config.chunks = 32;
-    config.fftsize = 32;
-    config.freqavg = 16;
+    config.fftsize = 128;
+    config.freqavg = 1;
     config.foff = (double)1.0/(double)27.0 * (double)config.freqavg;
-    //config.gulp = 16384;        // 2^24, equivalent to ~1.75s for 108us sampling time (for testing purposes)
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
-    // TEST
-    //config.nchans = 42;
     config.headlen = 32;
     config.inbits = 2;
-    config.nchans = 336;
     config.ngpus = 1;
     config.npol = 2;
     config.outdir = "/data/local/scratch/mat_test/";
     config.stokes = 4;
-    config.streamno = 4;
-    config.timesavg = 4;
+    config.timesavg = 1;
     config.vdiflen = 8000;
 
     config.batch = config.nchans;
