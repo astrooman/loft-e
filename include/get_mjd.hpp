@@ -3,7 +3,7 @@
 
 #include <iomanip>
 
-inline double get_mjd(int ref_epoch, size_t ref_second) {
+inline double GetMjd(int ref_epoch, size_t ref_second) {
 
     // leap year has very stupid rules, but I don't think anyone will use
     // this code in they year 2100, when divisibility by 100 is taken into account

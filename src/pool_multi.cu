@@ -608,7 +608,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
         // URGENT TODO: need to sort this out ASAP
         if (ready) {
             if (scaled_) {
-                filheader.tstart = get_mjd(starttime_.startepoch, starttime_.startsecond + gulpssent * config_.gulp * config_.tsamp);
+                filheader.tstart = GetMjd(starttime_.startepoch, starttime_.startsecond + gulpssent * config_.gulp * config_.tsamp);
 
                 if (verbose_) {
                     cout_guard.lock();
@@ -619,8 +619,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
                 filbuffer_ -> SendToDisk((gulpssent % 2), filheader, config_.outdir);
                 gulpssent++;
             } else {    // the first buffer will be used for getting the scaling factors
-                // TODO: implement GetScaling() method
-                //filbuffer_ -> GetScaling(ready, dedispstream_, dmeans_, dstdevs_);
+                filbuffer_ -> GetScaling(ready, dedispstream_, dmeans_, dstdevs_);
                 scaled_ = true;
                 ready = 0;
                 if (verbose_) {
@@ -677,7 +676,7 @@ void GPUpool::ReceiveData(int portid, int recport)
     int packcount{0};
 
     // TODO: be careful which port waits
-    if (recport == ports_[0]) { 
+    if (recport == ports_[0]) {
         unsigned char *tempbuf = recbufs_[0];
         // this will wait forever if nothing is sent to the given port
         numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen);
@@ -696,13 +695,13 @@ void GPUpool::ReceiveData(int portid, int recport)
         }
         if (numbytes == 0)
             continue;
-        
+
         frameno = (unsigned int)(recbufs_[portid][4] | (recbufs_[portid][5] << 8) | (recbufs_[portid][6] << 16));
         //cout << "Starting frame: " << frameno << endl;
         //cout.flush();
         if (frameno == 0) {
             break;
-        
+
         } // wait until reaching frame zero of next second before beginnning recording
     }
 
@@ -728,6 +727,6 @@ void GPUpool::ReceiveData(int portid, int recport)
 	    std::copy(recbufs_[portid] + headlen_, recbufs_[portid] + headlen_ + vdiflen_, inpol_[threadid] + vdiflen_ * bufidx);
         if ((threadid == 1) && (frameno > 10))
             readybufidx_[bufidx] = true;
-        
+
     }
 }
