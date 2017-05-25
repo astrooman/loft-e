@@ -26,8 +26,7 @@ using std::mutex;
 using std::vector;
 
 template <class BufferType>
-class Buffer
-{
+class Buffer {
     private:
         vector<thrust::device_vector<BufferType>> d_filterbank_;              // stores different Stoke parameters
         vector<thrust::host_vector<BufferType>> h_filterbank_;                // stores Stokes parameters in the RAM buffer
@@ -65,21 +64,22 @@ class Buffer
         Buffer(int nogulps_u, size_t extrasamples_u, size_t gulpsamples_u, size_t size_u, int id);
         ~Buffer(void);
 
+        BufferType **GetFilPointer(void) {return this->dfilterbank_;};
+
+        int CheckReadyBuffer(void);
+
+        ObsTime GetTime(int idx);
+
         void Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes);
         void Deallocate(void);
         void SendToDisk(int idx, header_f head, std::string outdir);
         void SendToRam(int idx, cudaStream_t &stream, int host_jump);
-        BufferType **GetFilPointer(void) {return this->dfilterbank_;};
-        int CheckReadyBuffer();
         void GetScaling(int idx, cudaStream_t &stream, float **d_means, float **d_rstdevs);
         void Update(ObsTime frame_time);
-        void write(BufferType *d_data, ObsTime frame_time, unsigned int amount, cudaStream_t stream);
-        // add deleted copy, move, etc constructors
 };
 
 template<class BufferType>
-Buffer<BufferType>::Buffer(int id) : gpuid_(id)
-{
+Buffer<BufferType>::Buffer(int id) : gpuid_(id) {
     cudaSetDevice(gpuid_);
     start_ = 0;
     end_ = 0;
@@ -90,8 +90,7 @@ Buffer<BufferType>::Buffer(int nogulps_u, size_t extrasamples_u, size_t gulpsamp
                                                                                 gulpsamples_(gulpsamples_u),
                                                                                 nogulps_(nogulps_u),
                                                                                 totalsamples_(size_u),
-                                                                                gpuid_(id)
-{
+                                                                                gpuid_(id) {
     start_ = 0;
     end_ = 0;
     state_ = new unsigned int[(int)totalsamples_];
@@ -99,14 +98,12 @@ Buffer<BufferType>::Buffer(int nogulps_u, size_t extrasamples_u, size_t gulpsamp
 }
 
 template<class BufferType>
-Buffer<BufferType>::~Buffer()
-{
+Buffer<BufferType>::~Buffer() {
     end_ = 0;
 }
 
 template<class BufferType>
-void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes)
-{
+void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes) {
     fil_saved_ = 0;
     accumulate_ = accumulate;
     extrasamples_ = extra;
@@ -137,8 +134,7 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
 }
 
 template<class T>
-void Buffer<T>::Deallocate(void)
-{
+void Buffer<T>::Deallocate(void) {
 
     cudaCheckError(cudaFree(dfilterbank_));
 
@@ -154,16 +150,14 @@ void Buffer<T>::Deallocate(void)
 }
 
 template<class T>
-void Buffer<T>::SendToDisk(int idx, header_f header, std::string outdir)
-{
+void Buffer<T>::SendToDisk(int idx, header_f header, std::string outdir) {
     SaveFilterbank(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, outdir);
     fil_saved_++;
     // need info from the telescope
 }
 
 template<class T>
-int Buffer<T>::CheckReadyBuffer()
-{
+int Buffer<T>::CheckReadyBuffer(void) {
     std::lock_guard<mutex> addguard(statemutex_);
     // for now check only the last position for the gulp
     for (int igulp = 0; igulp < nogulps_; igulp++) {
@@ -173,26 +167,25 @@ int Buffer<T>::CheckReadyBuffer()
     return 0;
 }
 
-/*template<class T>
-void Buffer<T>::GetScaling(int idx, cudaStream_t &stream, float **d_means, float **d_rstdevs)
+template<class T>
+void Buffer<T>::GetScaling(int idx, cudaStream_t &stream, float **dmeans, float **drstdevs)
 {
-    float *d_transpose;
-    cudaMalloc((void**)&d_transpose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float));
+    float *dtranspose;
+    cudaMalloc((void**)&dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float));
     for (int istoke = 0; istoke < nostokes_; istoke++) {
-        transpose<<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, d_transpose, nochans_, gulpsamples_ + extrasamples_);
-        scale_factors<<<1,nochans_,0,stream>>>(d_transpose, d_means, d_rstdevs, nochans_, gulpsamples_ + extrasamples_, istoke);
+        TransposeKernel<<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, dtranspose, nochans_, gulpsamples_ + extrasamples_);
+        ScaleFactorsKernel<<<1,nochans_,0,stream>>>(dtranspose, dmeans, drstdevs, nochans_, gulpsamples_ + extrasamples_, istoke);
     }
-    cudaFree(d_transpose);
+    cudaFree(dtranspose);
     // need this so I don't save this buffer
     statemutex_.lock();
     state_[idx * gulpsamples_ + extrasamples_ - 1] = 0;
     statemutex_.unlock();
-}*/
+}
 
 
 template<class T>
-void Buffer<T>::SendToRam(int idx, cudaStream_t &stream, int host_jump)
-{
+void Buffer<T>::SendToRam(int idx, cudaStream_t &stream, int host_jump) {
     // which half of the RAM buffer we are saving into
     host_jump *= (gulpsamples_ + extrasamples_) * nochans_;
     for (int istoke = 0; istoke < nostokes_; istoke++) {
@@ -218,15 +211,16 @@ void Buffer<T>::SendToRam(int idx, cudaStream_t &stream, int host_jump)
 
 
 template<class T>
-void Buffer<T>::Update(ObsTime frametime)
-{
+void Buffer<T>::Update(ObsTime frametime) {
     std::lock_guard<mutex> addguard(statemutex_);
     int framet = frametime.framet;
     int index = 0;
     //std::cout << framet << " " << index << std::endl;
     //std::cout.flush();
-    for (int ii = 0; ii < accumulate_; ii++) {
+    for (int iacc = 0; iacc < accumulate_; iacc++) {
         index = framet % (nogulps_ * gulpsamples_);
+        if ((index % gulpsamples_) == 0)
+            gulptimes_[index / gulpsamples_] = frametime;
         state_[index] = 1;
         //std::cout << framet << " " << index << " " << framet % totsize << std::endl;
         //std::cout.flush();
@@ -237,4 +231,10 @@ void Buffer<T>::Update(ObsTime frametime)
         framet++;
     }
 }
+
+template<class T>
+void Buffer<T>::GetTime(int idx) {
+    return gulptimes_[idx]
+}
+
 #endif
