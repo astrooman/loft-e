@@ -536,6 +536,8 @@ void GPUpool::DoGpuWork(int stream)
             frametime.startsecond = starttime_.startsecond;
             frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
 
+            //cout << frametime.framet << endl;
+
             for (int ipol = 0; ipol < nopols_; ipol++) {
                 cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }

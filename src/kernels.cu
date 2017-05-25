@@ -74,17 +74,20 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
                                     int inskip, int nogulps, int gulpsize, int extra, unsigned int framet,
                                     unsigned int perframe)
 {
+    // NOTE: nchans is the number of frequency channels AFTER the averaging
     unsigned int inidx = 0;
     unsigned int outidx = 0;
     unsigned int filtimeidx = 0;
-
+    unsigned int filfullidx = 0;
 
     for (int ichunk = 0; ichunk < outsampperblock; ichunk++) {
         filtimeidx = framet * perframe + blockIdx.x * outsampperblock + ichunk;
-        outidx = filtimeidx * nchans + threadIdx.x;
+        filfullidx = (filtimeidx % (nogulps * gulpsize)) * nchans;
+        outidx = filfullidx + threadIdx.x;
         for (int isamp = 0; isamp < avgtime; isamp++) {
             for (int ifreq = 0; ifreq < avgfreq; ifreq++) {
-                inidx = inskip + blockIdx.x * avgtime * nchans * outsampperblock + ichunk * nchans * avgtime + isamp * nchans + threadIdx.x * avgfreq + ifreq;
+                //inidx = inskip + blockIdx.x * avgtime * nchans * outsampperblock + ichunk * nchans * avgtime + isamp * nchans + threadIdx.x * avgfreq + ifreq;
+                inidx = inskip + blockIdx.x * outsampperblock * avgtime * nchans * avgfreq + ichunk * avgtime * nchans * avgfreq + isamp * nchans * avgfreq  + threadIdx.x * avgfreq + ifreq;
                 out[0][outidx] += in[0][inidx].x * in[0][inidx].x + in[0][inidx].y * in[0][inidx].y + in[1][inidx].x * in[1][inidx].x + in[1][inidx].y * in[1][inidx].y;
                 out[1][outidx] += in[0][inidx].x * in[0][inidx].x + in[0][inidx].y * in[0][inidx].y + in[1][inidx].x * in[1][inidx].x + in[1][inidx].y * in[1][inidx].y;
                 out[2][outidx] += 2.0f * in[0][inidx].x * in[1][inidx].x + 2.0f * in[0][inidx].y * in[1][inidx].y;
@@ -97,7 +100,7 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
         out[2][outidx] = (out[2][outidx] - means[2][threadIdx.x]) / stdevs[2][threadIdx.x] * 32.0 + 64.0;
         out[3][outidx] = (out[3][outidx] - means[3][threadIdx.x]) / stdevs[3][threadIdx.x] * 32.0 + 64.0;
 
-        if (filtimeidx < extra) {
+        if (filfullidx < extra) {
             out[0][outidx + nogulps * gulpsize * nchans] = out[0][outidx];
             out[1][outidx + nogulps * gulpsize * nchans] = out[1][outidx];
             out[2][outidx + nogulps * gulpsize * nchans] = out[2][outidx];
