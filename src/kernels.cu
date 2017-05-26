@@ -9,7 +9,7 @@ __device__ float fftfactor = 1.0/32.0 * 1.0/32.0;
 // TODO: have this change depending on the unpack factor
 __constant__ unsigned char kMask[] = {0x03, 0x0C, 0x30, 0xC0};
 
-__global__ void UnpackKernel(unsigned char __restrict__ **in, float __restrict__ **out, int pols, int perthread, int rem, size_t samples, int unpack)
+__global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples, int unpack)
 {
     int idx = blockIdx.x * blockDim.x * perthread + threadIdx.x;
     int skip = blockDim.x;
@@ -63,7 +63,7 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
         if (filfullidx < extra) {
             out[0][outidx + nogulps * gulpsize * nchans] = out[0][outidx];
             out[1][outidx + nogulps * gulpsize * nchans] = out[1][outidx];
-            out[2][outidx + no gulps * gulpsize * nchans] = out[2][outidx];
+            out[2][outidx + nogulps * gulpsize * nchans] = out[2][outidx];
             out[3][outidx + nogulps * gulpsize * nchans] = out[3][outidx];
         }
     }
@@ -88,7 +88,7 @@ __global__ void ScaleFactorsInitKernel(float **means, float **rstdevs, int stoke
 
 // NOTE: Filterbank data saved in the format t1c1,t1c2,t1c3,...
 // Need to transpose to t1c1,t2c1,t3c1,... for easy and efficient scaling kernel
-__global__ void TransposeKernel(float* __restrict__ in, float* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
+/*__global__ void TransposeKernel(float* __restrict__ in, float* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
 
     // very horrible implementation or matrix transpose
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -96,7 +96,7 @@ __global__ void TransposeKernel(float* __restrict__ in, float* __restrict__ out,
     for (int tsamp = 0; tsamp < ntimes; tsamp++) {
         out[start + tsamp] = in[idx + tsamp * nchans];
     }
-}
+}*/
 
 __global__ void ScaleFactorsKernel(float *in, float **means, float **rstdevs, unsigned int nchans, unsigned int ntimes, int param) {
     // calculates mean and standard deviation in every channel

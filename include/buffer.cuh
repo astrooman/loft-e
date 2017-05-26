@@ -133,8 +133,8 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
     std::cout << "Other memory done" << std::endl;
 }
 
-template<class T>
-void Buffer<T>::Deallocate(void) {
+template<class BufferType>
+void Buffer<BufferType>::Deallocate(void) {
 
     cudaCheckError(cudaFree(dfilterbank_));
 
@@ -149,15 +149,15 @@ void Buffer<T>::Deallocate(void) {
     delete [] gulptimes_;
 }
 
-template<class T>
-void Buffer<T>::SendToDisk(int idx, header_f header, std::string outdir) {
+template<class BufferType>
+void Buffer<BufferType>::SendToDisk(int idx, header_f header, std::string outdir) {
     SaveFilterbank(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, outdir);
     fil_saved_++;
     // need info from the telescope
 }
 
-template<class T>
-int Buffer<T>::CheckReadyBuffer(void) {
+template<class BufferType>
+int Buffer<BufferType>::CheckReadyBuffer(void) {
     std::lock_guard<mutex> addguard(statemutex_);
     // for now check only the last position for the gulp
     for (int igulp = 0; igulp < nogulps_; igulp++) {
@@ -167,13 +167,13 @@ int Buffer<T>::CheckReadyBuffer(void) {
     return 0;
 }
 
-template<class T>
-void Buffer<T>::GetScaling(int idx, cudaStream_t &stream, float **dmeans, float **drstdevs)
+template<class BufferType>
+void Buffer<BufferType>::GetScaling(int idx, cudaStream_t &stream, float **dmeans, float **drstdevs)
 {
     float *dtranspose;
     cudaMalloc((void**)&dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float));
     for (int istoke = 0; istoke < nostokes_; istoke++) {
-        TransposeKernel<<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, dtranspose, nochans_, gulpsamples_ + extrasamples_);
+        TransposeKernel<BufferType, float><<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, dtranspose, nochans_, gulpsamples_ + extrasamples_);
         ScaleFactorsKernel<<<1,nochans_,0,stream>>>(dtranspose, dmeans, drstdevs, nochans_, gulpsamples_ + extrasamples_, istoke);
     }
     cudaFree(dtranspose);
@@ -184,12 +184,12 @@ void Buffer<T>::GetScaling(int idx, cudaStream_t &stream, float **dmeans, float 
 }
 
 
-template<class T>
-void Buffer<T>::SendToRam(int idx, cudaStream_t &stream, int host_jump) {
+template<class BufferType>
+void Buffer<BufferType>::SendToRam(int idx, cudaStream_t &stream, int host_jump) {
     // which half of the RAM buffer we are saving into
     host_jump *= (gulpsamples_ + extrasamples_) * nochans_;
     for (int istoke = 0; istoke < nostokes_; istoke++) {
-        cudaCheckError(cudaMemcpyAsync(rambuffer_[istoke] + host_jump, hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(T), cudaMemcpyDeviceToHost, stream));
+        cudaCheckError(cudaMemcpyAsync(rambuffer_[istoke] + host_jump, hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType), cudaMemcpyDeviceToHost, stream));
         std::cout << "Sent stokes " << istoke << std::endl;
     }
     cudaStreamSynchronize(stream);
@@ -210,8 +210,8 @@ void Buffer<T>::SendToRam(int idx, cudaStream_t &stream, int host_jump) {
 }
 
 
-template<class T>
-void Buffer<T>::Update(ObsTime frametime) {
+template<class BufferType>
+void Buffer<BufferType>::Update(ObsTime frametime) {
     std::lock_guard<mutex> addguard(statemutex_);
     int framet = frametime.framet;
     int index = 0;
@@ -232,9 +232,9 @@ void Buffer<T>::Update(ObsTime frametime) {
     }
 }
 
-template<class T>
-void Buffer<T>::GetTime(int idx) {
-    return gulptimes_[idx]
+template<class BufferType>
+ObsTime Buffer<BufferType>::GetTime(int idx) {
+    return gulptimes_[idx];
 }
 
 #endif
