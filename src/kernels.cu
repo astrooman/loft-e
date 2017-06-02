@@ -4,12 +4,13 @@
 
 // __restrict__ tells the compiler there is no memory overlap
 
-__device__ float fftfactor = 1.0/32.0 * 1.0/32.0;
+//__device__ float fftfactor = 1.0/256.0 * 1.0/256.0;
+__device__ float fftfactor = 1.0;
 
 // TODO: have this change depending on the unpack factor
 __constant__ unsigned char kMask[] = {0x03, 0x0C, 0x30, 0xC0};
 
-__global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples, int unpack)
+/* __global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples, int unpack)
 {
     int idx = blockIdx.x * blockDim.x * perthread + threadIdx.x;
     int skip = blockDim.x;
@@ -27,7 +28,24 @@ __global__ void UnpackKernel(unsigned char **in, float **out, int pols, int pert
             }
         }
     }
+} */
+
+__global__ void UnpackKernel(unsigned char **in, float **out, int nopols, int bytesperthread, int rem, size_t samples, int unpack)
+{
+    int idx = blockIdx.x * blockDim.x * bytesperthread + threadIdx.x * bytesperthread;
+
+
+    if (idx < samples) {
+        for (int ipol = 0; ipol < nopols; ipol++) {
+            for (int ibyte = 0; ibyte < bytesperthread; ibyte++) {
+                for (int isamp = 0; isamp < unpack; isamp++) {
+                    out[ipol][idx * unpack + ibyte * unpack + isamp] = static_cast<float>(static_cast<short>((in[ipol][idx + ibyte] & kMask[isamp]) >> ( 2 * isamp)));
+                }
+            }
+        }
+    }
 }
+
 
 __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs,
                                     int avgfreq, int avgtime, int nchans, int outsampperblock,
@@ -47,7 +65,8 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
         for (int isamp = 0; isamp < avgtime; isamp++) {
             for (int ifreq = 0; ifreq < avgfreq; ifreq++) {
                 //inidx = inskip + blockIdx.x * avgtime * nchans * outsampperblock + ichunk * nchans * avgtime + isamp * nchans + threadIdx.x * avgfreq + ifreq;
-                inidx = inskip + blockIdx.x * outsampperblock * avgtime * nchans * avgfreq + ichunk * avgtime * nchans * avgfreq + isamp * nchans * avgfreq  + threadIdx.x * avgfreq + ifreq;
+		//inidx = inskip + blockIdx.x * outsampperblock * avgtime * nchans * avgfreq + ichunk * avgtime * nchans * avgfreq + isamp * nchans * avgfreq  + threadIdx.x * avgfreq + ifreq;
+                inidx = inskip + blockIdx.x * outsampperblock * avgtime * (nchans + 1) * avgfreq + ichunk * avgtime * (nchans + 1) * avgfreq + isamp * (nchans + 1) * avgfreq  + threadIdx.x * avgfreq + ifreq + 1;
                 out[0][outidx] += in[0][inidx].x * in[0][inidx].x + in[0][inidx].y * in[0][inidx].y + in[1][inidx].x * in[1][inidx].x + in[1][inidx].y * in[1][inidx].y;
                 out[1][outidx] += in[0][inidx].x * in[0][inidx].x + in[0][inidx].y * in[0][inidx].y + in[1][inidx].x * in[1][inidx].x + in[1][inidx].y * in[1][inidx].y;
                 out[2][outidx] += 2.0f * in[0][inidx].x * in[1][inidx].x + 2.0f * in[0][inidx].y * in[1][inidx].y;
@@ -55,10 +74,10 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
             }
         }
         // TODO: save the data in two places in memory
-        out[0][outidx] = (out[0][outidx] - means[0][threadIdx.x]) / stdevs[0][threadIdx.x] * 32.0 + 64.0;
-        out[1][outidx] = (out[1][outidx] - means[1][threadIdx.x]) / stdevs[1][threadIdx.x] * 32.0 + 64.0;
-        out[2][outidx] = (out[2][outidx] - means[2][threadIdx.x]) / stdevs[2][threadIdx.x] * 32.0 + 64.0;
-        out[3][outidx] = (out[3][outidx] - means[3][threadIdx.x]) / stdevs[3][threadIdx.x] * 32.0 + 64.0;
+        //out[0][outidx] = (out[0][outidx] * fftfactor - means[0][threadIdx.x]) / stdevs[0][threadIdx.x] * 32.0 + 64.0;
+        //out[1][outidx] = (out[1][outidx] * fftfactor - means[1][threadIdx.x]) / stdevs[1][threadIdx.x] * 32.0 + 64.0;
+        //out[2][outidx] = (out[2][outidx] * fftfactor - means[2][threadIdx.x]) / stdevs[2][threadIdx.x] * 32.0 + 64.0;
+        //out[3][outidx] = (out[3][outidx] * fftfactor - means[3][threadIdx.x]) / stdevs[3][threadIdx.x] * 32.0 + 64.0;
 
         if (filfullidx < extra) {
             out[0][outidx + nogulps * gulpsize * nchans] = out[0][outidx];

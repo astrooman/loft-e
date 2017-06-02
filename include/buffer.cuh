@@ -9,6 +9,7 @@
 */
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -172,11 +173,37 @@ void Buffer<BufferType>::GetScaling(int idx, cudaStream_t &stream, float **dmean
 {
     float *dtranspose;
     cudaMalloc((void**)&dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float));
+    unsigned char *hdata = new unsigned char[(gulpsamples_ + extrasamples_) * nochans_];
+    cudaCheckError(cudaMemcpy(hdata, hdfilterbank_[0] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+
+    std::ofstream outdata("nottransposed.dat");
+    for (int isamp = 0; isamp < gulpsamples_ + extrasamples_; isamp++) {
+        for (int ichan = 0; ichan < nochans_; ichan++) {
+            outdata << (int)hdata[isamp * nochans_ + ichan] << " ";
+        }
+        outdata << std::endl;
+    }
+    std::cout << "Saved the non-transposed file" << std::endl;
+    outdata.close();
+    delete [] hdata;
+    float *htranspose = new float[(gulpsamples_ + extrasamples_) * nochans_];
     for (int istoke = 0; istoke < nostokes_; istoke++) {
         TransposeKernel<BufferType, float><<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, dtranspose, nochans_, gulpsamples_ + extrasamples_);
+        if (istoke == 0)
+            cudaCheckError(cudaMemcpy(htranspose, dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float), cudaMemcpyDeviceToHost));
         ScaleFactorsKernel<<<1,nochans_,0,stream>>>(dtranspose, dmeans, drstdevs, nochans_, gulpsamples_ + extrasamples_, istoke);
     }
     cudaFree(dtranspose);
+    std::ofstream outfile("transposed.dat");
+    for (int ichan = 0; ichan < nochans_; ichan++) {
+        for (int isamp = 0; isamp < gulpsamples_ + extrasamples_; isamp++) {
+            outfile << htranspose[ichan * (gulpsamples_ + extrasamples_) + isamp] << " ";
+        }
+        outfile << std::endl;
+    }
+    std::cout << "Saved the transpose file..." << std::endl;
+    outfile.close();
+    delete [] htranspose;
     // need this so I don't save this buffer
     statemutex_.lock();
     state_[idx * gulpsamples_ + extrasamples_ - 1] = 0;

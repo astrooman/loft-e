@@ -347,14 +347,21 @@ void GPUpool::Initialise(void)
     sampperthread_ = min(power2factor(accumulate_ * vdiflen_), 1024);
     int needthreads = accumulate_ * vdiflen_ / sampperthread_;
     cudathreads_[0] = min(needthreads, 1024);
-    int needblocks = needthreads / cudathreads_[0];
+    int needblocks = (needthreads - 1) / cudathreads_[0] + 1;
+    
     cudablocks_[0] = min(needblocks, 65536);
     rem_ = needthreads - cudablocks_[0] * cudathreads_[0];
 
-    perblock_ = 128;        // the number of OUTPUT time samples (after averaging) per block
+    perblock_ = 100;        // the number of OUTPUT time samples (after averaging) per block
+    // NOTE: Have to be very careful with this number as vdiflen is not a power of 2
+    // This will cause problems when accumulate_ * 8 / inbits is less than 1 / (avgtime_ * perblock_ * fftsize_[0]
+    // This will give a non-integer number of blocks
     cudablocks_[1] = accumulate_ * vdiflen_ * 8 / inbits_ / avgtime_ / perblock_ / fftsizes_[0];
     cudathreads_[1] = filchans_;        // each thread in the block will output a single AVERAGED frequency channel
 
+    cout << "Unpack kernel grid: " << cudablocks_[0] << " blocks and " << cudathreads_[0] << " threads" <<endl;
+    cout << "Power kernel grid: " << cudablocks_[1] << " blocks and " << cudathreads_[1] << " threads" <<endl;
+    
 
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
@@ -536,16 +543,41 @@ void GPUpool::DoGpuWork(int stream)
             frametime.startsecond = starttime_.startsecond;
             frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
 
-            //cout << frametime.framet << endl;
-
             for (int ipol = 0; ipol < nopols_; ipol++) {
                 cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }
+
             UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_, 8 / inbits_);
+/*            std::ofstream unpackedfile("unpacked.dat");
+
+            float *outunpacked = new float[unpackedsize_];
+            cudaCheckError(cudaMemcpy(outunpacked, hdunpacked_[0], unpackedsize_ * sizeof(float), cudaMemcpyDeviceToHost));
+
+            for (int isamp = 0; isamp < unpackedsize_; isamp++) {
+                unpackedfile << outunpacked[isamp] << endl;
+            }
+
+            delete [] outunpacked;
+            unpackedfile.close();            
+*/
             for (int ipol = 0; ipol < nopols_; ipol++) {
                 cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
                 //cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
             }
+/*            std::ofstream fftedfile("ffted.dat");
+
+            cufftComplex *outfft = new cufftComplex[fftsize_];
+            cudaCheckError(cudaMemcpy(outfft, hdfft_[0], fftsize_ * sizeof(cufftComplex), cudaMemcpyDeviceToHost));
+
+            for (int isamp = 0; isamp < fftsize_; isamp++) {
+                fftedfile << outfft[isamp].x * outfft[isamp].x + outfft[isamp].y * outfft[isamp].y << endl;
+            }
+  
+            delete [] outfft;
+
+            fftedfile.close();
+            working_ = false;
+*/
             //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_, stream * scaledsize_);
             // this version should really be used, as we want to save directly into the filterbank buffer
             PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
