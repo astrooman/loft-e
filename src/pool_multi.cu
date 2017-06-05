@@ -716,7 +716,7 @@ void GPUpool::ReceiveData(int portid, int recport)
         numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen);
         starttime_.startepoch = (int)(tempbuf[7] & 0x3f);
         starttime_.startsecond = (int)(tempbuf[0] | (tempbuf[1] << 8) | (tempbuf[2] << 16) | ((tempbuf[3] & 0x3f) << 24));
-        telescope_ = string() + (char)tempbuf[12] + (char)tempbuf[13];
+        telescope_ = string() + (char)tempbuf[13] + (char)tempbuf[12];
         cout << starttime_.startepoch << " " << starttime_.startsecond << endl;
     }
 
