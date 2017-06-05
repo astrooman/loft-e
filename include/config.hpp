@@ -75,7 +75,7 @@ inline void default_config(InConfig &config) {
     config.vdiflen = 8000;
 
     config.batch = config.nchans;
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * fftsize * 2 * (double)config.timesavg;
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timesavg;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
     for (int ii = 0; ii < config.filchans; ii++)
          (config.killmask).push_back((int)1);
@@ -191,7 +191,7 @@ inline void read_config(std::string filename, InConfig &config) {
         std::cout << "Error opening the configuration file!!\n Will use default configuration instead." << std::endl;
     }
 
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * fftsize * 2 * (double)config.timesavg;
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timesavg;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
 
     inconfig.close();

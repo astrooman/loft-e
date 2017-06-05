@@ -204,7 +204,6 @@ GPUpool::~GPUpool(void)
 
 void GPUpool::Initialise(void)
 {
-
     noports_ = ports_.size();
 
     signal(SIGINT, GPUpool::HandleSignal);
@@ -317,7 +316,7 @@ void GPUpool::Initialise(void)
         cout << "Will create a buffer for the total of " << nogulps_ * dedispgulpsamples_ + dedispextrasamples_ << " time samples" << endl;
 
     filbuffer_ = unique_ptr<Buffer<unsigned char>>(new Buffer<unsigned char>(gpuid_));
-    filbuffer_ -> Allocate(accumulate_, dedispextrasamples_, dedispgulpsamples_, filchans_, nogulps_, nostokes_);
+    filbuffer_ -> Allocate(accumulate_, dedispextrasamples_, dedispgulpsamples_, filchans_, nogulps_, nostokes_, vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_);
 
     // STAGE: prepare and launch GPU work
     if (verbose_)
@@ -348,7 +347,7 @@ void GPUpool::Initialise(void)
     int needthreads = accumulate_ * vdiflen_ / sampperthread_;
     cudathreads_[0] = min(needthreads, 1024);
     int needblocks = (needthreads - 1) / cudathreads_[0] + 1;
-    
+
     cudablocks_[0] = min(needblocks, 65536);
     rem_ = needthreads - cudablocks_[0] * cudathreads_[0];
 
@@ -361,7 +360,7 @@ void GPUpool::Initialise(void)
 
     cout << "Unpack kernel grid: " << cudablocks_[0] << " blocks and " << cudathreads_[0] << " threads" <<endl;
     cout << "Power kernel grid: " << cudablocks_[1] << " blocks and " << cudathreads_[1] << " threads" <<endl;
-    
+
 
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
@@ -542,7 +541,7 @@ void GPUpool::DoGpuWork(int stream)
             frametime.startepoch = starttime_.startepoch;
             frametime.startsecond = starttime_.startsecond;
             frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
-
+            //cout << frametime.framet << endl;
             for (int ipol = 0; ipol < nopols_; ipol++) {
                 cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }
@@ -558,7 +557,7 @@ void GPUpool::DoGpuWork(int stream)
             }
 
             delete [] outunpacked;
-            unpackedfile.close();            
+            unpackedfile.close();
 */
             for (int ipol = 0; ipol < nopols_; ipol++) {
                 cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
@@ -572,7 +571,7 @@ void GPUpool::DoGpuWork(int stream)
             for (int isamp = 0; isamp < fftsize_; isamp++) {
                 fftedfile << outfft[isamp].x * outfft[isamp].x + outfft[isamp].y * outfft[isamp].y << endl;
             }
-  
+
             delete [] outfft;
 
             fftedfile.close();

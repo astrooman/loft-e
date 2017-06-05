@@ -39,6 +39,7 @@ class Buffer {
         int nochans_;             // number of filterbank channels per time sample
         int nogulps_;
         int nostokes_;             // number of Stokes parameters to keep in the buffer
+        int perframe_;
         int fil_saved_;
 
         mutex buffermutex_;
@@ -71,7 +72,7 @@ class Buffer {
 
         ObsTime GetTime(int idx);
 
-        void Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes);
+        void Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes, int perframe);
         void Deallocate(void);
         void SendToDisk(int idx, header_f head, std::string outdir);
         void SendToRam(int idx, cudaStream_t &stream, int host_jump);
@@ -104,7 +105,7 @@ Buffer<BufferType>::~Buffer() {
 }
 
 template<class BufferType>
-void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes) {
+void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes, int perframe) {
     fil_saved_ = 0;
     accumulate_ = accumulate;
     extrasamples_ = extra;
@@ -112,6 +113,7 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
     nochans_ = filchans;
     nogulps_ = gulps;
     nostokes_ = stokes;
+    perframe_ = perframe;
     // size for a single Stokes parameter
     totalsamples_ = nogulps_ * gulpsamples_ + extrasamples_;
 
@@ -237,14 +239,14 @@ void Buffer<BufferType>::SendToRam(int idx, cudaStream_t &stream, int host_jump)
 }
 
 
-template<class BufferType>
+/* template<class BufferType>
 void Buffer<BufferType>::Update(ObsTime frametime) {
     std::lock_guard<mutex> addguard(statemutex_);
     int framet = frametime.framet;
     int index = 0;
     //std::cout << framet << " " << index << std::endl;
     //std::cout.flush();
-    for (int iacc = 0; iacc < accumulate_; iacc++) {
+    for (int isamp = 0; isamp < accumulate_; isamp++) {
         index = framet % (nogulps_ * gulpsamples_);
         if ((index % gulpsamples_) == 0)
             gulptimes_[index / gulpsamples_] = frametime;
@@ -256,6 +258,29 @@ void Buffer<BufferType>::Update(ObsTime frametime) {
             state_[index + nogulps_ * gulpsamples_] = 1;
         }
         framet++;
+    }
+} */
+
+template<class BufferType>
+void Buffer<BufferType>::Update(ObsTime frametime) {
+    std::lock_guard<mutex> addguard(statemutex_);
+    int framet = frametime.framet;
+    int filtime = frametime.framet * perframe_;
+    int index = 0;
+    //std::cout << framet << " " << index << std::endl;
+    //std::cout.flush();
+    for (int isamp = 0; isamp < accumulate_ * perframe_; isamp++) {
+        index = filtime % (nogulps_ * gulpsamples_);
+        if ((index % gulpsamples_) == 0)
+            gulptimes_[index / gulpsamples_] = frametime;
+        state_[index] = 1;
+        //std::cout << framet << " " << index << " " << framet % totsize << std::endl;
+        //std::cout.flush();
+        // second condition is to avoid sending the second buffer when the very fisrt buffer is being filled
+        if ((index < extrasamples_) && (framet > extrasamples_)) {
+            state_[index + nogulps_ * gulpsamples_] = 1;
+        }
+        filtime++;
     }
 }
 
