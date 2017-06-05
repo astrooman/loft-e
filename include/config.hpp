@@ -56,28 +56,27 @@ inline void default_config(InConfig &config) {
     config.verbose = false;
 
     config.accumulate = 1024;
-    config.band = 1.185;
+    config.band = 128;
     config.dstart = 0.0;
     config.dend = 4000.0;
     config.ftop = 1400.0;
-
     config.beamno = 1;
     config.chunks = 32;
     config.fftsize = 128;
     config.freqavg = 1;
-    config.foff = (double)1.0/(double)27.0 * (double)config.freqavg;
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
     config.headlen = 32;
     config.inbits = 2;
     config.ngpus = 1;
     config.npol = 2;
-    config.outdir = "/data/local/scratch/mat_test/";
+    config.outdir = "./";
     config.stokes = 4;
     config.timesavg = 1;
     config.vdiflen = 8000;
 
     config.batch = config.nchans;
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * 32 * (double)config.timesavg;
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * fftsize * 2 * (double)config.timesavg;
+    config.foff = config.band / config.fftsize * (double)config.freqavg;
     for (int ii = 0; ii < config.filchans; ii++)
          (config.killmask).push_back((int)1);
 }
@@ -191,6 +190,9 @@ inline void read_config(std::string filename, InConfig &config) {
     } else {
         std::cout << "Error opening the configuration file!!\n Will use default configuration instead." << std::endl;
     }
+
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * fftsize * 2 * (double)config.timesavg;
+    config.foff = config.band / config.fftsize * (double)config.freqavg;
 
     inconfig.close();
 }

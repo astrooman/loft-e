@@ -34,7 +34,6 @@ __global__ void UnpackKernel(unsigned char **in, float **out, int nopols, int by
 {
     int idx = blockIdx.x * blockDim.x * bytesperthread + threadIdx.x * bytesperthread;
 
-
     if (idx < samples) {
         for (int ipol = 0; ipol < nopols; ipol++) {
             for (int ibyte = 0; ibyte < bytesperthread; ibyte++) {
