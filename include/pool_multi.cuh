@@ -138,6 +138,8 @@ class GPUpool
         int *fftsizes_;
         int *sockfiledesc_;
 
+        std::string telescope_;
+
         unsigned char **dinpol_;
         unsigned char **hdinpol_;
         unsigned char **inpol_;

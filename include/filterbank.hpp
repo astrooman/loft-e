@@ -42,7 +42,7 @@ struct header_f
     \param saved number of the filterbank files saved so far
 */
 template<class T>
-inline void SaveFilterbank(T **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string outdir)
+inline void SaveFilterbank(T **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string telescope, std::string outdir)
 {
 
     std::ostringstream oss;
@@ -51,14 +51,11 @@ inline void SaveFilterbank(T **ph_filterbank, size_t nsamps, size_t start, heade
     int length{0};
     char field[60];
     char stokesid[4] = {'I', 'Q', 'U', 'V'};
-    // save just I for testing purposes
+
     for (int ii = 0; ii < stokes; ii++) {
         oss.str("");
-        //oss << time << "_" << stokesid[ii] << "_beam_" << head.ibeam;
-        //oss << stokesid[ii] << "_chunk_" << saved << "_beam_" << head.ibeam;
-        oss << stokesid[ii] << "_" << std::setprecision(8) << std::fixed << head.tstart << "_beam_" << head.ibeam;
+        oss << stokesid[ii] << "_" << std::setprecision(8) << std::fixed << head.tstart << "_" << telescope;
         filename = outdir + "/" + oss.str() + ".fil";
-        //filename = "stokes_" + oss.str() + ".fil";
         std::fstream outfile(filename.c_str(), std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
         // save only when the stream has been opened correctly

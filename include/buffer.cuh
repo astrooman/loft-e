@@ -32,8 +32,6 @@ class Buffer {
         vector<thrust::device_vector<BufferType>> d_filterbank_;              // stores different Stoke parameters
         vector<thrust::host_vector<BufferType>> h_filterbank_;                // stores Stokes parameters in the RAM buffer
 
-
-
         int accumulate_;
         int gpuid_;
         int nochans_;             // number of filterbank channels per time sample
@@ -74,7 +72,7 @@ class Buffer {
 
         void Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes, int perframe);
         void Deallocate(void);
-        void SendToDisk(int idx, header_f head, std::string outdir);
+        void SendToDisk(int idx, header_f head, std::string telescope, std::string outdir);
         void SendToRam(int idx, cudaStream_t &stream, int host_jump);
         void GetScaling(int idx, cudaStream_t &stream, float **d_means, float **d_rstdevs);
         void Update(ObsTime frame_time);
@@ -153,8 +151,8 @@ void Buffer<BufferType>::Deallocate(void) {
 }
 
 template<class BufferType>
-void Buffer<BufferType>::SendToDisk(int idx, header_f header, std::string outdir) {
-    SaveFilterbank(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, outdir);
+void Buffer<BufferType>::SendToDisk(int idx, header_f header, std::string telescope, std::string outdir) {
+    SaveFilterbank(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, telescope, outdir);
     fil_saved_++;
     // need info from the telescope
 }

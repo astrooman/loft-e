@@ -122,6 +122,7 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             samptime_(config.tsamp),
                                             scaled_(false),
                                             strip_(config.ips),
+                                            telescope_("NT"),
                                             vdiflen_(config.vdiflen),
                                             verbose_(config.verbose)
 {
@@ -630,7 +631,9 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
     filheader.nifs = 1;
     filheader.data_type = 1;
     filheader.machine_id = 2;
-    filheader.telescope_id = 2;
+    // NOTE: 5 is for Jodrell
+    // TODO: How to deal with other telescopes?
+    filheader.telescope_id = 5;
 
     while(working_) {
         ready = filbuffer_ -> CheckReadyBuffer();
@@ -647,7 +650,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
                     cout_guard.unlock();
                 }
                 filbuffer_ -> SendToRam(ready, dedispstream_, (gulpssent % 2));
-                filbuffer_ -> SendToDisk((gulpssent % 2), filheader, config_.outdir);
+                filbuffer_ -> SendToDisk((gulpssent % 2), filheader, telescope_, config_.outdir);
                 gulpssent++;
             } else {    // the first buffer will be used for getting the scaling factors
                 filbuffer_ -> GetScaling(ready, dedispstream_, dmeans_, dstdevs_);
@@ -713,6 +716,7 @@ void GPUpool::ReceiveData(int portid, int recport)
         numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen);
         starttime_.startepoch = (int)(tempbuf[7] & 0x3f);
         starttime_.startsecond = (int)(tempbuf[0] | (tempbuf[1] << 8) | (tempbuf[2] << 16) | ((tempbuf[3] & 0x3f) << 24));
+        telescope_ = string() + (char)tempbuf[12] + (char)tempbuf[13];
         cout << starttime_.startepoch << " " << starttime_.startsecond << endl;
     }
 
