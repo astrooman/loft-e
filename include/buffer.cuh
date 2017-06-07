@@ -29,9 +29,6 @@ using std::vector;
 template <class BufferType>
 class Buffer {
     private:
-        vector<thrust::device_vector<BufferType>> d_filterbank_;              // stores different Stoke parameters
-        vector<thrust::host_vector<BufferType>> h_filterbank_;                // stores Stokes parameters in the RAM buffer
-
         int accumulate_;
         int gpuid_;
         int nochans_;             // number of filterbank channels per time sample
@@ -49,9 +46,9 @@ class Buffer {
         size_t end_;
         size_t totalsamples_;            // total size of the data: #gulps * gulp size + extra samples for dedispersion
 
-        BufferType **dfilterbank_;
-        BufferType **hdfilterbank_;
-        BufferType **rambuffer_;
+        unsigned char **dfilterbank_;
+        unsigned char **hdfilterbank_;
+        unsigned char **rambuffer_;
 
         ObsTime *gulptimes_;
 
@@ -119,9 +116,9 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
     std::cout << totalsamples_ * nochans_ << std::endl;
 
     gulptimes_ = new ObsTime[nogulps_];
-    hdfilterbank_ = new BufferType*[nostokes_];
+    hdfilterbank_ = new unsigned char*[nostokes_];
     state_ = new unsigned int[(int)totalsamples_];
-    cudaCheckError(cudaHostAlloc((void**)&rambuffer_, nostokes_ * sizeof(BufferType*), cudaHostAllocDefault));
+    cudaCheckError(cudaHostAlloc((void**)&rambuffer_, nostokes_ * sizeof(unsigned char*), cudaHostAllocDefault));
 
     for (int istoke = 0; istoke < nostokes_; istoke++) {
         cudaCheckError(cudaMalloc((void**)&hdfilterbank_[istoke], totalsamples_ * nochans_ * sizeof(BufferType)));
@@ -129,8 +126,8 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
         std::cout << "Stokes " << istoke << " done" << std::endl;
     }
 
-    cudaCheckError(cudaMalloc((void**)&dfilterbank_, nostokes_ * sizeof(BufferType*)));
-    cudaCheckError(cudaMemcpy(dfilterbank_, hdfilterbank_, nostokes_ * sizeof(BufferType*), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMalloc((void**)&dfilterbank_, nostokes_ * sizeof(unsigned char*)));
+    cudaCheckError(cudaMemcpy(dfilterbank_, hdfilterbank_, nostokes_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
     std::cout << "Other memory done" << std::endl;
 }
 
@@ -152,7 +149,7 @@ void Buffer<BufferType>::Deallocate(void) {
 
 template<class BufferType>
 void Buffer<BufferType>::SendToDisk(int idx, header_f header, std::string telescope, std::string outdir) {
-    SaveFilterbank(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, telescope, outdir);
+    SaveFilterbank<BufferType>(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, telescope, outdir);
     fil_saved_++;
     // need info from the telescope
 }

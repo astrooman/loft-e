@@ -41,8 +41,8 @@ struct header_f
     \param head structure with all the information require for the filterbank header
     \param saved number of the filterbank files saved so far
 */
-template<class T>
-inline void SaveFilterbank(T **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string telescope, std::string outdir)
+template<class FilType>
+inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string telescope, std::string outdir)
 {
 
     std::ostringstream oss;
