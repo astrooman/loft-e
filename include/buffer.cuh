@@ -26,7 +26,6 @@
 using std::mutex;
 using std::vector;
 
-template <class BufferType>
 class Buffer {
     private:
         int accumulate_;
@@ -67,6 +66,7 @@ class Buffer {
 
         ObsTime GetTime(int idx);
 
+        template<class BufferType>
         void Allocate(int accumulate, size_t extra, size_t gulp, int filchans, int gulps, int stokes, int perframe);
         void Deallocate(void);
         void SendToDisk(int idx, header_f head, std::string telescope, std::string outdir);
@@ -149,7 +149,7 @@ void Buffer<BufferType>::Deallocate(void) {
 
 template<class BufferType>
 void Buffer<BufferType>::SendToDisk(int idx, header_f header, std::string telescope, std::string outdir) {
-    SaveFilterbank<BufferType>(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * idx, header, nostokes_, fil_saved_, telescope, outdir);
+    SaveFilterbank<BufferType>(rambuffer_, gulpsamples_ + extrasamples_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType) * idx, header, nostokes_, fil_saved_, telescope, outdir);
     fil_saved_++;
     // need info from the telescope
 }
@@ -170,13 +170,13 @@ void Buffer<BufferType>::GetScaling(int idx, cudaStream_t &stream, float **dmean
 {
     float *dtranspose;
     cudaMalloc((void**)&dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float));
-    unsigned char *hdata = new unsigned char[(gulpsamples_ + extrasamples_) * nochans_];
-    cudaCheckError(cudaMemcpy(hdata, hdfilterbank_[0] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+    unsigned char *hdata = new unsigned char[(gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType)];
+    cudaCheckError(cudaMemcpy(hdata, hdfilterbank_[0] + (idx - 1) * gulpsamples_ * nochans_ * sizeof(BufferType), (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType), cudaMemcpyDeviceToHost));
 
     std::ofstream outdata("nottransposed.dat");
     for (int isamp = 0; isamp < gulpsamples_ + extrasamples_; isamp++) {
         for (int ichan = 0; ichan < nochans_; ichan++) {
-            outdata << (int)hdata[isamp * nochans_ + ichan] << " ";
+            outdata << (float)(reinterpret_cast<BufferType*>(hdata)[isamp * nochans_ + ichan]) << " ";
         }
         outdata << std::endl;
     }
@@ -185,7 +185,7 @@ void Buffer<BufferType>::GetScaling(int idx, cudaStream_t &stream, float **dmean
     delete [] hdata;
     float *htranspose = new float[(gulpsamples_ + extrasamples_) * nochans_];
     for (int istoke = 0; istoke < nostokes_; istoke++) {
-        TransposeKernel<BufferType, float><<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, dtranspose, nochans_, gulpsamples_ + extrasamples_);
+        TransposeKernel<BufferType, float><<<1,nochans_,0,stream>>>(hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_ * sizeof(BufferType), dtranspose, nochans_, gulpsamples_ + extrasamples_);
         if (istoke == 0)
             cudaCheckError(cudaMemcpy(htranspose, dtranspose, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(float), cudaMemcpyDeviceToHost));
         ScaleFactorsKernel<<<1,nochans_,0,stream>>>(dtranspose, dmeans, drstdevs, nochans_, gulpsamples_ + extrasamples_, istoke);
@@ -211,21 +211,13 @@ void Buffer<BufferType>::GetScaling(int idx, cudaStream_t &stream, float **dmean
 template<class BufferType>
 void Buffer<BufferType>::SendToRam(int idx, cudaStream_t &stream, int host_jump) {
     // which half of the RAM buffer we are saving into
-    host_jump *= (gulpsamples_ + extrasamples_) * nochans_;
+    host_jump *= (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType);
     for (int istoke = 0; istoke < nostokes_; istoke++) {
-        cudaCheckError(cudaMemcpyAsync(rambuffer_[istoke] + host_jump, hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType), cudaMemcpyDeviceToHost, stream));
+        cudaCheckError(cudaMemcpyAsync(rambuffer_[istoke] + host_jump, hdfilterbank_[istoke] + (idx - 1) * gulpsamples_ * nochans_ * sizeof(BufferType), (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType), cudaMemcpyDeviceToHost, stream));
         std::cout << "Sent stokes " << istoke << std::endl;
     }
     cudaStreamSynchronize(stream);
     std::cout << "Sent to RAM... " << std::endl;
-    // dump to the host memory only - not interested in the dedisperion in the dump mode
-/*
-    cudaCheckError(cudaMemcpyAsync(ph_fil_ + host_jump, pd_filterbank_[0] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(T), cudaMemcpyDeviceToHost, stream));
-    cudaCheckError(cudaMemcpyAsync(ph_fil_ + host_jump + 1 * (gulpsamples_ + extrasamples_) * nochans_, pd_filterbank_[1] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(T), cudaMemcpyDeviceToHost, stream));
-    cudaCheckError(cudaMemcpyAsync(ph_fil_ + host_jump + 2 * (gulpsamples_ + extrasamples_) * nochans_, pd_filterbank_[2] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(T), cudaMemcpyDeviceToHost, stream));
-    cudaCheckError(cudaMemcpyAsync(ph_fil_ + host_jump + 3 * (gulpsamples_ + extrasamples_) * nochans_, pd_filterbank_[3] + (idx - 1) * gulpsamples_ * nochans_, (gulpsamples_ + extrasamples_) * nochans_ * sizeof(T), cudaMemcpyDeviceToHost, stream));
-    cudaStreamSynchronize(stream);
-*/
     statemutex_.lock();
     // HACK: the call below is wrong - restarts the whole sample state
     //std::fill(sample_state, sample_state + totsize, 0);

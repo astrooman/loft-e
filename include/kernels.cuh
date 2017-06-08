@@ -11,13 +11,13 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
 
 __global__ void ScaleFactorsInitKernel(float **means, float **rstdevs, int stokes);
 
-template<class InType, class OutType>
-__global__ void TransposeKernel(InType* __restrict__ in, OutType* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
+template<class BufferType, class OutType>
+__global__ void TransposeKernel(unsigned char* __restrict__ in, OutType* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
     // very horrible implementation or matrix transpose
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int start = idx * ntimes;
     for (int tsamp = 0; tsamp < ntimes; tsamp++) {
-        out[start + tsamp] = (OutType)in[idx + tsamp * nchans];
+        out[start + tsamp] = (OutType)(reinterpret_cast<BufferType*>(in))[idx + tsamp * nchans];
     }
 }
 

@@ -52,6 +52,8 @@ inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t 
     char field[60];
     char stokesid[4] = {'I', 'Q', 'U', 'V'};
 
+    head.nbits = sizeof(FilType) * 8;
+
     for (int ii = 0; ii < stokes; ii++) {
         oss.str("");
         oss << stokesid[ii] << "_" << std::setprecision(8) << std::fixed << head.tstart << "_" << telescope;
@@ -186,7 +188,7 @@ inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t 
             strcpy(field, "HEADER_END");
             outfile.write(field, length * sizeof(char));
 
-            size_t to_save = nsamps * head.nchans * head.nbits / 8;
+            size_t to_save = nsamps * head.nchans * sizeof(FilType);
             T *ph_filsave = ph_filterbank[ii];
             outfile.write(reinterpret_cast<char*>(&ph_filsave[start]), to_save);
             //outfile.write(reinterpret_cast<char*>(&ph_filterbank[start + ii * nsamps * head.nchans]), to_save);

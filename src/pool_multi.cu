@@ -363,6 +363,38 @@ void GPUpool::Initialise(void)
     cout << "Power kernel grid: " << cudablocks_[1] << " blocks and " << cudathreads_[1] << " threads" <<endl;
 
 
+    switch (filbits_) {
+        case 8:
+            {
+                for (int igstream = 0; igstream < nostreams_; igstream++) {
+                    gputhreads_.push_back(thread(&GPUpool::DoGpuWork<unsigned char>, this, igstream));
+                }
+            }
+            break;
+        case 16:
+            {
+                for (int igstream = 0; igstream < nostreams_; igstream++) {
+                    gputhreads_.push_back(thread(&GPUpool::DoGpuWork<unsigned short>, this, igstream));
+                }
+            }
+            break;
+        case 32:
+            {
+                 for (int igstream = 0; igstream < nostreams_; igstream++) {
+                     gputhreads_.push_back(thread(&GPUpool::DoGpuWork<float>, this, igstream));
+                 }
+            }
+            break;
+        default:
+            {
+                cerr << "Unsupported number of output bits!\n"
+                cerr << "Will set to 8!"
+                for (int igstream = 0; igstream < nostreams_; igstream++) {
+                    gputhreads_.push_back(thread(&GPUpool::DoGpuWork<unsigned char>, this, igstream));
+                }
+            }
+    }
+
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
     }
@@ -626,7 +658,6 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
     filheader.dec = 0.0;
     filheader.rdm = 0.0;
     filheader.ibeam = 1;
-    filheader.nbits = 8;
     filheader.nchans = filchans_;
     filheader.nifs = 1;
     filheader.data_type = 1;
