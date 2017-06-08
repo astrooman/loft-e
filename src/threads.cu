@@ -9,7 +9,6 @@
 #include <cuda.h>
 #include <cufft.h>
 
-#include "buffer.cuh"
 #include "config.hpp"
 #include "dedisp/dedisp.hpp"
 #include "dedisp/DedispPlan.hpp"

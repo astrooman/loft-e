@@ -64,8 +64,7 @@ class GPUpool
 {
     private:
 
-        // TODO: this should really be template-like - we may choose to scale to different number of bits
-        std::unique_ptr<Buffer<unsigned char>> filbuffer_;
+        std::unique_ptr<Buffer> filbuffer_;
         std::unique_ptr<DedispPlan> dedispplan_;
 
         std::vector<int> ports_;
@@ -77,6 +76,7 @@ class GPUpool
         static bool working_;
         bool scaled_;
 
+        const unsigned int filbits_;
         const unsigned int headlen_;
         const unsigned int vdiflen_;
 
@@ -97,7 +97,6 @@ class GPUpool
         unsigned int fftbatchsize_;
         unsigned int fftpoints_;
         unsigned int fftsize_;
-        unsigned int filbits_;
         unsigned int filchans_;
         unsigned int gpuid_;
         unsigned int inbits_;
@@ -240,6 +239,7 @@ class GPUpool
         */
         void search_thread(int sstream);
 };
+
 template<class OutType>
 void GPUpool::DoGpuWork(int stream)
 {
@@ -251,13 +251,11 @@ void GPUpool::DoGpuWork(int stream)
     int retaff = pthread_setaffinity_np(gputhreads_[stream].native_handle(), sizeof(cpu_set_t), &cpuset);
 
     if (retaff != 0) {
-        cerr << "Error setting thread affinity for the GPU processing, stream " << stream << endl;
+        std::cerr << "Error setting thread affinity for the GPU processing, stream " << stream << std::endl;
     }
 
     if (verbose_) {
-        cout_guard.lock();
-        cout << "Starting worker " << gpuid_ << ":" << stream << " on CPU " << sched_getcpu() << endl;
-        cout_guard.unlock();
+        std::cout << "Starting worker " << gpuid_ << ":" << stream << " on CPU " << sched_getcpu() << std::endl;
     }
 
     cudaCheckError(cudaSetDevice(gpuid_));

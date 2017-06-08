@@ -41,7 +41,7 @@ struct header_f
     \param head structure with all the information require for the filterbank header
     \param saved number of the filterbank files saved so far
 */
-template<class FilType>
+
 inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t start, header_f head, int stokes, int saved, std::string telescope, std::string outdir)
 {
 
@@ -51,8 +51,6 @@ inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t 
     int length{0};
     char field[60];
     char stokesid[4] = {'I', 'Q', 'U', 'V'};
-
-    head.nbits = sizeof(FilType) * 8;
 
     for (int ii = 0; ii < stokes; ii++) {
         oss.str("");
@@ -188,11 +186,10 @@ inline void SaveFilterbank(unsigned char **ph_filterbank, size_t nsamps, size_t 
             strcpy(field, "HEADER_END");
             outfile.write(field, length * sizeof(char));
 
-            size_t to_save = nsamps * head.nchans * sizeof(FilType);
-            T *ph_filsave = ph_filterbank[ii];
-            outfile.write(reinterpret_cast<char*>(&ph_filsave[start]), to_save);
-            //outfile.write(reinterpret_cast<char*>(&ph_filterbank[start + ii * nsamps * head.nchans]), to_save);
-
+            size_t bytestosave = nsamps * head.nchans * head.nbits / 8;
+            unsigned char *ph_filsave = ph_filterbank[ii];
+            outfile.write(reinterpret_cast<char*>(&ph_filsave[start]), bytestosave);
+            
         } else {
             std::cerr << "Problems with saving the filterbank file" << std::endl;
         }

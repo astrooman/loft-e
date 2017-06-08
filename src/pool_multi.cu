@@ -109,6 +109,7 @@ GPUpool::GPUpool(int id, InConfig config) : accumulate_(config.accumulate),
                                             avgtime_(config.timesavg),
                                             dedispgulpsamples_(config.gulp),
                                             fftpoints_(config.fftsize),
+                                            filbits_(config.outbits),
                                             filchans_(config.fftsize / config.freqavg),
                                             freqoff_(config.foff),
                                             gpuid_(config.gpuids[id]),
@@ -316,8 +317,8 @@ void GPUpool::Initialise(void)
     if (verbose_)
         cout << "Will create a buffer for the total of " << nogulps_ * dedispgulpsamples_ + dedispextrasamples_ << " time samples" << endl;
 
-    filbuffer_ = unique_ptr<Buffer<unsigned char>>(new Buffer<unsigned char>(gpuid_));
-    filbuffer_ -> Allocate(accumulate_, dedispextrasamples_, dedispgulpsamples_, filchans_, nogulps_, nostokes_, vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_);
+    filbuffer_ = unique_ptr<Buffer>(new Buffer(gpuid_));
+    filbuffer_ -> Allocate(accumulate_, dedispextrasamples_, dedispgulpsamples_, filchans_, nogulps_, nostokes_, vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_, filbits_);
 
     // STAGE: prepare and launch GPU work
     if (verbose_)
@@ -362,7 +363,6 @@ void GPUpool::Initialise(void)
     cout << "Unpack kernel grid: " << cudablocks_[0] << " blocks and " << cudathreads_[0] << " threads" <<endl;
     cout << "Power kernel grid: " << cudablocks_[1] << " blocks and " << cudathreads_[1] << " threads" <<endl;
 
-
     switch (filbits_) {
         case 8:
             {
@@ -387,16 +387,12 @@ void GPUpool::Initialise(void)
             break;
         default:
             {
-                cerr << "Unsupported number of output bits!\n"
-                cerr << "Will set to 8!"
+                cerr << "Unsupported number of output bits!\n";
+                cerr << "Will set to 8!";
                 for (int igstream = 0; igstream < nostreams_; igstream++) {
                     gputhreads_.push_back(thread(&GPUpool::DoGpuWork<unsigned char>, this, igstream));
                 }
             }
-    }
-
-    for (int igstream = 0; igstream < nostreams_; igstream++) {
-        gputhreads_.push_back(thread(&GPUpool::DoGpuWork, this, igstream));
     }
 
     cudaCheckError(cudaStreamCreate(&dedispstream_));
@@ -485,146 +481,6 @@ void GPUpool::Initialise(void)
 
 }
 
-void GPUpool::DoGpuWork(int stream)
-{
-    // let us hope one stream will be enough or we will have to squeeze multiple streams into single CPU core
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET((int)gpuid_ * 3 + 1, &cpuset);
-
-    int retaff = pthread_setaffinity_np(gputhreads_[stream].native_handle(), sizeof(cpu_set_t), &cpuset);
-
-    if (retaff != 0) {
-        cerr << "Error setting thread affinity for the GPU processing, stream " << stream << endl;
-    }
-
-    if (verbose_) {
-        cout_guard.lock();
-        cout << "Starting worker " << gpuid_ << ":" << stream << " on CPU " << sched_getcpu() << endl;
-        cout_guard.unlock();
-    }
-
-    cudaCheckError(cudaSetDevice(gpuid_));
-
-    bool innext{false};
-    bool inthis{false};
-
-    int bufferidx;
-    int checkidx{5};    // hav many receive buffer samples to probe for the existance of the packet
-    int startnext;
-    int startthis;
-
-    ObsTime frametime;
-
-    unsigned int perframe = vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_;     // the number of output time samples per frame
-
-    int donebuffers = 0;
-
-    while (working_) {
-        // TODO: there must be a way to simplify this
-        // I should not be allowed to write code
-	// startthis check the end of one buffer
-	// startnext checks the beginning of the buffer after it
-        if (nostreams_ == 1) {      // different behaviour if we are using one stream only - need to check both buffers
-            for (int ibuffer = 0; ibuffer < 2; ibuffer++) {
-                bufferidx = ibuffer;
-                startthis = (ibuffer + 1) * accumulate_ - checkidx;
-                startnext = ((ibuffer + 1) % 2) * accumulate_; // + checkidx;
-
-                inthis = inthis || readybufidx_[startthis + checkidx - 1];
-                innext = innext || readybufidx_[startnext + checkidx];
-
-                /*for (int iidx = 0; iidx < checkidx; iidx++) {
-                    inthis = inthis && readybufidx_[startthis + iidx];
-                    innext = innext && readybufidx_[startnext + iidx];
-                } */
-
-		if (inthis && innext)
-			break;
-
-		inthis = false;
-		innext = false;
-            }
-        } else {
-            bufferidx = stream;
-            startthis = (stream + 1) * accumulate_ - checkidx;
-            startnext = ((stream + 1) % nostreams_) * accumulate_; // + checkidx;
-
-            for (int iidx = 0; iidx < checkidx; iidx++) {
-                inthis = inthis || readybufidx_[startthis + iidx];
-                innext = innext || readybufidx_[startnext + iidx];
-            }
-        }
-
-        if (inthis && innext) {
-
-            readybufidx_[startthis + checkidx - 1] = false;
-            readybufidx_[startnext + checkidx] = false;
-
-            /* for (int iidx = 0; iidx < checkidx; iidx++) {
-                // need to restart the state of what we have already sent for processing
-                readybufidx_[startthis + iidx] = false;
-                readybufidx_[startnext + iidx] = false;
-            } */
-
-            //cout << "Have the buffer " << bufferidx << ":" << startthis << ":" << startnext << endl;
-            //cout.flush();
-            innext = false;
-            inthis = false;
-            frametime.startepoch = starttime_.startepoch;
-            frametime.startsecond = starttime_.startsecond;
-            frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
-            //cout << frametime.framet << endl;
-            for (int ipol = 0; ipol < nopols_; ipol++) {
-                cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
-            }
-
-            UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_, 8 / inbits_);
-/*            std::ofstream unpackedfile("unpacked.dat");
-
-            float *outunpacked = new float[unpackedsize_];
-            cudaCheckError(cudaMemcpy(outunpacked, hdunpacked_[0], unpackedsize_ * sizeof(float), cudaMemcpyDeviceToHost));
-
-            for (int isamp = 0; isamp < unpackedsize_; isamp++) {
-                unpackedfile << outunpacked[isamp] << endl;
-            }
-
-            delete [] outunpacked;
-            unpackedfile.close();
-*/
-            for (int ipol = 0; ipol < nopols_; ipol++) {
-                cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
-                //cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
-            }
-/*            std::ofstream fftedfile("ffted.dat");
-
-            cufftComplex *outfft = new cufftComplex[fftsize_];
-            cudaCheckError(cudaMemcpy(outfft, hdfft_[0], fftsize_ * sizeof(cufftComplex), cudaMemcpyDeviceToHost));
-
-            for (int isamp = 0; isamp < fftsize_; isamp++) {
-                fftedfile << outfft[isamp].x * outfft[isamp].x + outfft[isamp].y * outfft[isamp].y << endl;
-            }
-
-            delete [] outfft;
-
-            fftedfile.close();
-            working_ = false;
-*/
-            //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_, stream * scaledsize_);
-            // this version should really be used, as we want to save directly into the filterbank buffer
-            PowerScaleKernel<float><<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
-            filbuffer_ -> Update(frametime);
-            // ScaleKernel<<<cudablocks_[2], cudathreads_[2], 0, gpustreams_[stream]>>>(dpower_, filbuffer_ -> GetFilPointer());
-            cudaCheckError(cudaDeviceSynchronize());
-            donebuffers++;
-            //if (donebuffers > 5)
-            //    working_ = false;
-        } else {
-            std::this_thread::yield();
-        }
-    }
-}
-
 void GPUpool::SendForDedispersion(cudaStream_t dstream)
 {
     cpu_set_t cpuset;
@@ -658,6 +514,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
     filheader.dec = 0.0;
     filheader.rdm = 0.0;
     filheader.ibeam = 1;
+    filheader.nbits = filbits_;
     filheader.nchans = filchans_;
     filheader.nifs = 1;
     filheader.data_type = 1;
@@ -684,7 +541,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
                 filbuffer_ -> SendToDisk((gulpssent % 2), filheader, telescope_, config_.outdir);
                 gulpssent++;
             } else {    // the first buffer will be used for getting the scaling factors
-                filbuffer_ -> GetScaling(ready, dedispstream_, dmeans_, dstdevs_);
+                filbuffer_ -> GetScaling<unsigned char>(ready, dedispstream_, dmeans_, dstdevs_);
                 scaled_ = true;
                 ready = 0;
                 if (verbose_) {

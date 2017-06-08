@@ -43,6 +43,7 @@ struct InConfig {
     unsigned int nchans;        // number of 1MHz channels
     unsigned int ngpus;         // number of GPUs to use
     unsigned int npol;
+    unsigned int outbits;
     unsigned int vdiflen;   // length in bytes of the single VDIF packed excluding header
     unsigned int port;
     unsigned int stokes;        // number of Stokes parameters to output
@@ -69,6 +70,7 @@ inline void default_config(InConfig &config) {
     config.inbits = 2;
     config.ngpus = 1;
     config.npol = 2;
+    config.outbits = 8;
     config.outdir = "./";
     config.stokes = 4;
     config.timesavg = 1;
@@ -114,7 +116,8 @@ inline void print_config(const InConfig &config) {
     std::cout << "\tOutput directory: " << config.outdir << std::endl;
     std::cout << "\tNumber of generater filterbank channels: " << config.filchans << std::endl;
     std::cout << "\tNumber of channels to average: " << config.freqavg << std::endl;
-    std::cout << "\tNumber of time samples to average:" << config.timesavg << std::endl;
+    std::cout << "\tNumber of time samples to average: " << config.timesavg << std::endl;
+    std::cout << "\tOutput bits per sample: " << config.outbits << std::endl;
     std::cout << "!!!CURRENTLY NOT IN USE!!!: " << std::endl;
     std::cout << "\tDedisperse gulp size: " << config.gulp << std::endl;
     std::cout << "\tStart DM: " << config.dstart << std::endl;
@@ -167,6 +170,8 @@ inline void read_config(std::string filename, InConfig &config) {
                 config.stokes = std::stoi(paravalue);
             } else if (paraname == "NO_STREAMS") {
                 config.streamno = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "OUT_BITS") {
+                config.outbits = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "PORTS") {
                 std::istringstream ssvalue(paravalue);
                 std::string ipports;
