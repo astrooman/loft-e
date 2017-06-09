@@ -68,7 +68,6 @@ class Buffer {
 
         ObsTime GetTime(int idx);
 
-
         template<class BufferType>
         void GetScaling(int idx, cudaStream_t &stream, float **d_means, float **d_rstdevs);
 

@@ -541,7 +541,20 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
                 filbuffer_ -> SendToDisk((gulpssent % 2), filheader, telescope_, config_.outdir);
                 gulpssent++;
             } else {    // the first buffer will be used for getting the scaling factors
-                filbuffer_ -> GetScaling<unsigned char>(ready, dedispstream_, dmeans_, dstdevs_);
+                swith(filbits_) {
+                    case 8:
+                        filbuffer_ -> GetScaling<unsigned char>(ready, dedispstream_, dmeans_, dstdevs_);
+                        break;
+                    case 16:
+                        filbuffer_ -> GetScaling<unsigned short>(ready, dedispstream_, dmeans_, dstdevs_);
+                        break;
+                    case 32:
+                        filbuffer_ -> GetScaling<float>(ready, dedispstream_, dmeans_, dstdevs_);
+                        break;
+                    // NOTE: This should never be executed
+                    default:
+                        break;
+                }
                 scaled_ = true;
                 ready = 0;
                 if (verbose_) {
