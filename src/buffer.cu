@@ -126,7 +126,7 @@ void Buffer::Update(ObsTime frametime) {
         //std::cout << framet << " " << index << " " << framet % totsize << std::endl;
         //std::cout.flush();
         // second condition is to avoid sending the second buffer when the very fisrt buffer is being filled
-        if ((index < extrasamples_) && (framet > extrasamples_)) {
+        if ((index < extrasamples_) && (filtime > extrasamples_)) {
             state_[index + nogulps_ * gulpsamples_] = 1;
         }
         filtime++;

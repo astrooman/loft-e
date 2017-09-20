@@ -353,7 +353,7 @@ void GPUpool::Initialise(void)
     cudablocks_[0] = min(needblocks, 65536);
     rem_ = needthreads - cudablocks_[0] * cudathreads_[0];
 
-    perblock_ = 100;        // the number of OUTPUT time samples (after averaging) per block
+    perblock_ = 128;        // the number of OUTPUT time samples (after averaging) per block
     // NOTE: Have to be very careful with this number as vdiflen is not a power of 2
     // This will cause problems when accumulate_ * 8 / inbits is less than 1 / (avgtime_ * perblock_ * fftsize_[0]
     // This will give a non-integer number of blocks
@@ -541,7 +541,7 @@ void GPUpool::SendForDedispersion(cudaStream_t dstream)
                 filbuffer_ -> SendToDisk((gulpssent % 2), filheader, telescope_, config_.outdir);
                 gulpssent++;
             } else {    // the first buffer will be used for getting the scaling factors
-                swith(filbits_) {
+                switch(filbits_) {
                     case 8:
                         filbuffer_ -> GetScaling<unsigned char>(ready, dedispstream_, dmeans_, dstdevs_);
                         break;

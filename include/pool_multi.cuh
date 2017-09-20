@@ -367,9 +367,9 @@ void GPUpool::DoGpuWork(int stream)
             //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_, stream * scaledsize_);
             // this version should really be used, as we want to save directly into the filterbank buffer
             PowerScaleKernel<OutType><<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
-            filbuffer_ -> Update(frametime);
             // ScaleKernel<<<cudablocks_[2], cudathreads_[2], 0, gpustreams_[stream]>>>(dpower_, filbuffer_ -> GetFilPointer());
             cudaCheckError(cudaDeviceSynchronize());
+            filbuffer_ -> Update(frametime);
             donebuffers++;
             //if (donebuffers > 5)
             //    working_ = false;
