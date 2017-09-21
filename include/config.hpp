@@ -1,11 +1,16 @@
-#ifndef _H_PAFRB_CONFIG
-#define _H_PAFRB_CONFIG
+#ifndef _H_LOFTE_CONFIG
+#define _H_LOFTE_CONFIG
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 #include <heimdall/params.hpp>
@@ -15,13 +20,13 @@ struct InConfig {
     bool verbose;
 
     double band;                // sampling rate for each band in MHz
-    double dend;
-    double dstart;
+    double dmend;
+    double dmstart;
     double foff;                // channel width in MHz
     double ftop;                // frequency of the top channel in MHz
-    double toread;
     double tsamp;               // sampling time
 
+    std::chrono::system_clock::time_point recordstart;
 
     std::string outdir;
 
@@ -30,99 +35,84 @@ struct InConfig {
     std::vector<int> killmask;
     std::vector<std::vector<int>> ports;
 
-    unsigned int accumulate;    // number of 108us complete chunks to process on the GPU at once
-    unsigned int batch;
-    unsigned int beamno;        // number of beams per card
-    unsigned int chunks;        // time chunks to process - testing only
-    unsigned int fftsize;
-    unsigned int filchans;      // number fo filterbank channels
-    unsigned int freqavg;          // number of frequency channels to average
-    unsigned int gulp;
-    unsigned int headlen;
-    unsigned int inbits;
-    unsigned int nchans;        // number of 1MHz channels
-    unsigned int ngpus;         // number of GPUs to use
-    unsigned int npol;
-    unsigned int vdiflen;   // length in bytes of the single VDIF packed excluding header
-    unsigned int port;
-    unsigned int stokes;        // number of Stokes parameters to output
-    unsigned int streamno;      // number of CUDA streams for filterbanking
-    unsigned int timesavg;         // number of time samples to average
+
+    unsigned int accumulate;        //!< ??
+    unsigned int batch;             //!< ??
+    unsigned int fftsize;           //!< Single FFT size
+    unsigned int filchans;          //!< Number of output filterbank channels
+    unsigned int freqavg;           //!< Number of frequency channels to average
+    unsigned int gulp;              //!< Dedispersion gulp size
+    unsigned int headlen;           //!< Length (in bytes) of the VDIF header
+    unsigned int inbits;            //!< ??
+    unsigned int nobeams;           //!< Number of beams per node
+    unsigned int nochans;           //!< number of 1MHz channels - REMOVE
+    unsigned int nogpus;            //!< number of GPUs to use - REMOVE
+    unsigned int nopols;            //!< Number of incoming polarisations
+    unsigned int noports;           //!< Number of ports used for receiving
+    unsigned int nostokes;          //!< Number of Stokes parameters to compute
+    unsigned int nostreams;         //!< Number of GPU streams to use for filterbank
+    unsigned int record;            //!< Number of seconds to record
+    unsigned int vdiflen;           //!< Length (in bytes) of the single VDIF packed excluding header
+    unsigned int timeavg;           //!< Number of time samples to average
 
 };
 
-inline void default_config(InConfig &config) {
+inline void SetDefaultConfig(InConfig &config) {
     config.test = false;
     config.verbose = false;
 
-    config.accumulate = 1024;
     config.band = 128;
-    config.dstart = 0.0;
-    config.dend = 4000.0;
+    config.dmend = 4000.0;
+    config.dmstart = 0.0;
     config.ftop = 1400.0;
-    config.beamno = 1;
-    config.chunks = 32;
+
+    config.accumulate = 1024;
     config.fftsize = 128;
     config.freqavg = 1;
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
     config.headlen = 32;
     config.inbits = 2;
-    config.ngpus = 1;
-    config.npol = 2;
+    config.nobeams = 1;
+    config.nogpus = 1;
+    config.nopols = 2;
+    config.nostokes = 4;
     config.outdir = "./";
-    config.stokes = 4;
-    config.timesavg = 1;
+    config.record = 300;            //!< Record 5 minutes of data
+    config.timeavg = 1;
     config.vdiflen = 8000;
 
     config.batch = config.nchans;
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timesavg;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
-    for (int ii = 0; ii < config.filchans; ii++)
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timeavg;
+    for (int ichan = 0; ichan < config.filchans; ichan++)
          (config.killmask).push_back((int)1);
 }
 
-inline void print_config(const InConfig &config) {
-
-    // polymorphic lambda needs g++ version 4.9 or higher
-    // std::vector<auto> might not work on all systems
-    // no support for C++14 with nvcc yet
-
-    auto plambda_s = [](std::ostream &os, std::string sintro, std::vector<std::string> values) -> std::ostream& {
-        os << sintro << ": ";
-        for (auto iptr = values.begin(); iptr != values.end(); iptr++)
-            os << *iptr << " ";
-        os << std::endl;
-        return os;
-    };
-
-    auto plambda_i = [](std::ostream &os, std::string sintro, std::vector<int> values) -> std::ostream& {
-        os << sintro << ": ";
-        for (auto iptr = values.begin(); iptr != values.end(); iptr++)
-            os << *iptr << " ";
-        os << std::endl;
-        return os;
-    };
+inline void PrintConfig(const InConfig &config) {
 
     std::cout << "Configuration overview: " << std::endl;
-    std::cout << "\tNumber of GPUs to use: " << config.ngpus << std::endl;
-    plambda_i(std::cout, "\t\tIDs", config.gpuids);
-    std::cout << "\tNumber of CUDA streams used for filterbanking: " << config.streamno << std::endl;
-    plambda_s(std::cout, "\tIPs to use", config.ips);
-    std::cout << "\tPorts to use";
-    for (int ii = 0; ii < config.ports.size(); ii++)
-        plambda_i(std::cout, "\t\t" + config.ips[ii], config.ports[ii]);
-    std::cout << "\tOutput directory: " << config.outdir << std::endl;
-    std::cout << "\tNumber of generater filterbank channels: " << config.filchans << std::endl;
-    std::cout << "\tNumber of channels to average: " << config.freqavg << std::endl;
-    std::cout << "\tNumber of time samples to average:" << config.timesavg << std::endl;
-    std::cout << "!!!CURRENTLY NOT IN USE!!!: " << std::endl;
-    std::cout << "\tDedisperse gulp size: " << config.gulp << std::endl;
-    std::cout << "\tStart DM: " << config.dstart << std::endl;
-    std::cout << "\tEnd DM: " << config.dend << std::endl;
+    std::cout << "\t - the number of GPUs to use: " << config.nogpus << std::endl;
+    std::cout << "\t - IPs to listen on: " << std::endl;
+    for (auto ip : ips) {
+        std::cout << "\t\t * " << ip << std::endl;
+    }
+    std::cout << "\t - ports to listen on: " << std::endl;
+    for (auto port : ports) {
+        std::cout << "\t\t * " << port << std::endl;
+    }
+    std::cout << "\t - output directory: " << config.outdir << std::endl;
+    time_t tmptime = std::chrono::system_clock::to_time_t(config.recordstart);
+    std::cout << "\t - recording start time (experimental): " << std::asctime(std::gmtime(&tmptime)) << std::endl;
+    std::cout << "\t - the number of seconds to record: " << config.record << std::endl;
+    std::cout << "\t - number of channels to average: " << config.freqavg << std::endl;
+    std::cout << "\t - number of time samples to average:" << config.timeavg << std::endl;
+    std::cout << "\t - dedisperse gulp size: " << config.gulp << std::endl;
+    std::cout << "\t - start DM: " << config.dmstart << std::endl;
+    std::cout << "\t - end DM: " << config.dmend << std::endl;
 
 }
 
-inline void read_config(std::string filename, InConfig &config) {
+inline void ReadConfig(std::string filename, InConfig &config) {
 
     std::fstream inconfig(filename.c_str(), std::ios_base::in);
     std::string line;
@@ -134,39 +124,51 @@ inline void read_config(std::string filename, InConfig &config) {
             std::istringstream ossline(line);
             ossline >> paraname >> paravalue;
 
-            if (paraname == "DM_END") {
-                config.dend = stod(paravalue);
-            } else if (paraname == "DM_START") {
-                config.dstart = stod(paravalue);
-            } else if (paraname == "FFT_SIZE") {
+            if (paraname == "DMEND") {
+                config.dmend = stod(paravalue);
+            } else if (paraname == "DMSTART") {
+                config.dmstart = stod(paravalue);
+            } else if (paraname == "FFTSIZE") {
                 config.fftsize = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "FREQ_AVERAGE") {
+            } else if (paraname == "FREQAVG") {
                 config.freqavg = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "DEDISP_GULP") {
+            } else if (paraname == "DEDISPGULP") {
                 config.gulp = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "GPU_IDS") {
+            } else if (paraname == "GPUIDS") {
                 std::istringstream svalue(paravalue);
                 std::string strgpu;
                 while(std::getline(svalue, strgpu, ','))
                     config.gpuids.push_back(std::stoi(strgpu));
-            } else if (paraname == "IP") {
+            } else if (paraname == "IPS") {
                 std::istringstream svalue(paravalue);
                 std::string strip;
                 while(std::getline(svalue, strip, ','))
                     config.ips.push_back(strip);
-            } else if (paraname == "NO_1MHZ_CHANS") {
-                config.nchans = (unsigned int)(std::stoi(paravalue));
-                config.batch = config.nchans;
-            } else if (paraname == "NO_BEAMS") {
-                config.beamno = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "NO_GPUS") {
-                config.ngpus = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "NO_POLS") {
-                config.npol = std::stoi(paravalue);
-            } else if (paraname == "NO_STOKES") {
-                config.stokes = std::stoi(paravalue);
-            } else if (paraname == "NO_STREAMS") {
-                config.streamno = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "NO1MHZCHANS") {
+                config.nochans = (unsigned int)(std::stoi(paravalue));
+                config.batch = config.nochans;
+            } else if (paraname == "NOBEAMS") {
+                config.nobeams = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "NOGPUS") {
+                config.nogpus = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "NOPOLS") {
+                config.nopols = std::stoi(paravalue);
+            } else if (paraname == "NOSTOKES") {
+                config.nostokes = std::stoi(paravalue);
+            } else if (paraname == "NOSTREAMS") {
+                config.nostreams = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "OUTDIR") {
+                config.outdir = paravalue;
+                struct stat chkdir;
+                if (stat(argv[iarg], &chkdir) == -1) {
+                    std::cerr << "Stat error" << std::endl;
+                } else {
+                    bool isdir = S_ISDIR(chkdir.st_mode);
+                    if (isdir)
+                        config.outdir = std::string(argv[iarg]);
+                    else
+                        std::cout << "Output directory does not exist! Will use the default directory!" << std::endl;
+                }
             } else if (paraname == "PORTS") {
                 std::istringstream ssvalue(paravalue);
                 std::string ipports;
@@ -179,10 +181,10 @@ inline void read_config(std::string filename, InConfig &config) {
 
                     config.ports.push_back(vtmp);
                 }
-            } else if (paraname == "READ") {
-                config.toread = std::stod(paravalue);
+            } else if (paraname == "RECORD") {
+                config.record = std::stod(paravalue);
             } else if (paraname == "TIME_AVERAGE") {
-                config.timesavg = (unsigned int)(std::stoi(paravalue));
+                config.timeavg = (unsigned int)(std::stoi(paravalue));
             } else {
                 std::cout << "Error: unrecognised parameter: " << paraname << std::endl;
             }
@@ -191,7 +193,7 @@ inline void read_config(std::string filename, InConfig &config) {
         std::cout << "Error opening the configuration file!!\n Will use default configuration instead." << std::endl;
     }
 
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timesavg;
+    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timeavg;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
 
     inconfig.close();
@@ -254,4 +256,5 @@ inline void set_search_params(hd_params &params, InConfig config)
     params.spectra_per_second = 0;
     params.output_dir = ".";
 }
+
 #endif

@@ -81,26 +81,7 @@ int power2factor(unsigned int inbytes) {
     return factor / 2;
 };
 
-Oberpool::Oberpool(InConfig config) : ngpus(config.ngpus)
-{
 
-    for (int ii = 0; ii < ngpus; ii++) {
-        gpuvector.push_back(unique_ptr<GPUpool>(new GPUpool(ii, config)));
-    }
-
-    for (int ii = 0; ii < ngpus; ii++) {
-        threadvector.push_back(thread(&GPUpool::Initialise, std::move(gpuvector[ii])));
-    }
-
-}
-
-Oberpool::~Oberpool(void)
-{
-    for (int ii = 0; ii < ngpus; ii++) {
-        threadvector[ii].join();
-    }
-
-}
 
 bool GPUpool::working_ = true;
 
