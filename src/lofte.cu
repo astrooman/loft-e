@@ -10,11 +10,12 @@
 
 #include "config.hpp"
 #include "errors.hpp"
-#include "main_pool.hpp"
+#include "main_pool.cuh"
 
 using std::cerr;
 using std::cout;
 using std::endl;
+using std::exception;
 using std::string;
 using std::vector;
 
@@ -64,12 +65,12 @@ int main(int argc, char *argv[])
                         cout << "Output directory does not exist! Will use default directory!";
                 }
             } else if (std::string(argv[iarg]) == "--gpuid") {
-                for (int igpu = 0; igpu < config.ngpus; igpu++) {
+                for (int igpu = 0; igpu < config.nogpus; igpu++) {
                     iarg++;
                     config.gpuids.push_back(atoi(argv[iarg]));
                 }
             } else if (std::string(argv[iarg]) == "--ip") {
-                for (int iip = 0; iip < config.ngpus; iip++) {
+                for (int iip = 0; iip < config.nogpus; iip++) {
                     iarg++;
                     config.ips.push_back(std::string(argv[iarg]));
                 }

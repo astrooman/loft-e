@@ -81,7 +81,7 @@ inline void SetDefaultConfig(InConfig &config) {
     config.timeavg = 1;
     config.vdiflen = 8000;
 
-    config.batch = config.nchans;
+    config.batch = config.nochans;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
     config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timeavg;
     for (int ichan = 0; ichan < config.filchans; ichan++)
@@ -93,12 +93,14 @@ inline void PrintConfig(const InConfig &config) {
     std::cout << "Configuration overview: " << std::endl;
     std::cout << "\t - the number of GPUs to use: " << config.nogpus << std::endl;
     std::cout << "\t - IPs to listen on: " << std::endl;
-    for (auto ip : ips) {
+    for (auto ip : config.ips) {
         std::cout << "\t\t * " << ip << std::endl;
     }
     std::cout << "\t - ports to listen on: " << std::endl;
-    for (auto port : ports) {
-        std::cout << "\t\t * " << port << std::endl;
+    for (auto poolports : config.ports) {
+        for (auto port : poolports) {
+            std::cout << "\t\t * " << port << std::endl;
+        }
     }
     std::cout << "\t - output directory: " << config.outdir << std::endl;
     time_t tmptime = std::chrono::system_clock::to_time_t(config.recordstart);
@@ -158,14 +160,13 @@ inline void ReadConfig(std::string filename, InConfig &config) {
             } else if (paraname == "NOSTREAMS") {
                 config.nostreams = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "OUTDIR") {
-                config.outdir = paravalue;
                 struct stat chkdir;
-                if (stat(argv[iarg], &chkdir) == -1) {
+                if (stat(paravalue.c_str(), &chkdir) == -1) {
                     std::cerr << "Stat error" << std::endl;
                 } else {
                     bool isdir = S_ISDIR(chkdir.st_mode);
                     if (isdir)
-                        config.outdir = std::string(argv[iarg]);
+                        config.outdir = paravalue;
                     else
                         std::cout << "Output directory does not exist! Will use the default directory!" << std::endl;
                 }
@@ -218,8 +219,8 @@ inline void set_search_params(hd_params &params, InConfig config)
     params.f0              = config.ftop;
     params.df              = -abs(config.foff);    // just to make sure it is negative
     // no need for dm params as the code will not do it
-    params.dm_min          = config.dstart;
-    params.dm_max          = config.dend;
+    params.dm_min          = config.dmstart;
+    params.dm_max          = config.dmend;
     params.dm_tol          = 1.25;
     params.dm_pulse_width  = 40;//e-6; // TODO: Check why this was here
     params.dm_nbits        = 32;//8;

@@ -3,6 +3,8 @@
 #include <utility>
 #include <vector>
 
+#include "main_pool.cuh"
+
 using std::move;
 using std::thread;
 using std::unique_ptr;
@@ -11,17 +13,17 @@ using std::vector;
 MainPool::MainPool(InConfig config) : nogpus(config.nogpus) {
 
     for (int igpu = 0; igpu < nogpus; ++igpu) {
-        gpuvector.push_back(unique_ptr<GPUpool>(new GPUpool(igpu, config)));
+        gpuvector.push_back(unique_ptr<GpuPool>(new GpuPool(igpu, config)));
     }
 
     for (int igpu = 0; igpu < nogpus; ++igpu) {
-        threadvector.push_back(thread(&GPUpool::Initialise, std::move(gpuvector[igpu])));
+        threadvector.push_back(thread(&GpuPool::Initialise, std::move(gpuvector[igpu])));
     }
 
 }
 
 MainPool::~MainPool(void) {
-    for (int igpu = 0; igpu < ngpus; ++igpu) {
+    for (int igpu = 0; igpu < nogpus; ++igpu) {
         threadvector[igpu].join();
     }
 }
