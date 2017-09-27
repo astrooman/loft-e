@@ -66,8 +66,8 @@ inline void SetDefaultConfig(InConfig &config) {
     config.dmstart = 0.0;
     config.ftop = 1400.0;
 
-    config.accumulate = 1024;
-    config.fftsize = 128;
+    config.accumulate = 4000;
+    config.fftsize = 512;
     config.freqavg = 1;
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
     config.headlen = 32;
@@ -75,10 +75,11 @@ inline void SetDefaultConfig(InConfig &config) {
     config.nobeams = 1;
     config.nogpus = 1;
     config.nopols = 2;
-    config.nostokes = 4;
+    config.nostokes = 1;
+    config.nostreams = 1;
     config.outdir = "./";
     config.record = 300;            //!< Record 5 minutes of data
-    config.timeavg = 1;
+    config.timeavg = 8;
     config.vdiflen = 8000;
 
     config.batch = config.nochans;

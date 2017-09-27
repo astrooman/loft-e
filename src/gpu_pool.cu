@@ -145,8 +145,6 @@ GpuPool::~GpuPool(void)
 
     cudaCheckError(cudaFreeHost(inpol_));
 
-    delete [] hdscaled_;
-    delete [] hdpower_;
     delete [] hdunpacked_;
     delete [] hdinpol_;
     delete [] framenumbers_;
@@ -155,6 +153,7 @@ GpuPool::~GpuPool(void)
 }
 
 void GpuPool::Initialise(void)
+
 {
     noports_ = ports_.size();
 
@@ -180,36 +179,42 @@ void GpuPool::Initialise(void)
         PrintSafe("Initialising the memory on pool", poolid_, "...");
     }
 
-    // NOTE: We should really use just one stream for processing
-    // TODO: Make sure everything is optimised enough to meet this requirement
-    inpolbufsize_ = max(2, nostreams_) * accumulate_ * vdiflen_;		// only one-stream scenario will have an extra buffer
-    inpolgpusize_ = accumulate_ * vdiflen_ * nostreams_;
-    int unpackfactor = 8 / inbits_;
-    unpackedsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
-    fftsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor / 2 + 1;
-    powersize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor;
-    scaledsize_ = accumulate_ * vdiflen_ * nostreams_ * unpackfactor / avgfreq_ / avgtime_;
+    gpustreams_ = new cudaStream_t[nostreams_];
 
-    // fftpoints_ is the number of output frequency channels - need to input 2 times that as we are doing R2C transform
+    // NOTE: We have to use one stream for the GPU filterbank processing
+    // NOTE: One stream has to use two buffers side by side to cover for time spent on copying
+    inpolbufsize_ = 2 * accumulate_ * vdiflen_;
+    readybufidx_ = new bool[inpolbufsize_];
+    framenumbers_ = new unsigned int[2 * accumulate_];
+    inpolgpusize_ = accumulate_ * vdiflen_ * nostreams_;
+    // NOTE: 4 unpacked samples per incoming byte
+    unpackedsize_ = accumulate_ * vdiflen_ * nostreams_ * 4;
+
     fftsizes_ = new int[1];
+    // NOTE: Need twice as many input samples for the R2C transform
     fftsizes_[0] = 2 * fftpoints_;
     fftbatchsize_ = unpackedsize_ / fftsizes_[0] / nostreams_;
-    fftsize_ = fftbatchsize_ * ((int)(fftsizes_[0] / 2) + 1);
-    //fftbatchsize_ = fftsize_ / fftsizes_[0] / nostreams_;
-    readybufidx_ = new bool[inpolbufsize_];
-    framenumbers_ = new unsigned int[max(2, nostreams_) * accumulate_];
+    // NOTE: The output of the R2C transform is FFTSIZE / 2 + 1
+    fftsize_ = fftbatchsize_ * ((int)fftsizes_[0] / 2 + 1) * nostreams_;
+
+    fftplans_ = new cufftHandle[nostreams_];
+    for (int igstream = 0; igstream < nostreams_; igstream++) {
+        cudaCheckError(cudaStreamCreate(&gpustreams_[igstream]));
+        cufftCheckError(cufftPlanMany(&fftplans_[igstream], 1, fftsizes_, NULL, 1, fftpoints_, NULL, 1, fftpoints_, CUFFT_R2C, fftbatchsize_));
+        cufftCheckError(cufftSetStream(fftplans_[igstream], gpustreams_[igstream]));
+    }
 
     hdinpol_ = new unsigned char*[nopols_];
     hdunpacked_ = new float*[nopols_];
     hdfft_ = new cufftComplex*[nopols_];
-//    hdpower_ = new float*[nostokes_];
-//    hdscaled_ = new unsigned char*[nostokes_];
+
     cudaCheckError(cudaHostAlloc((void**)&inpol_, nopols_ * sizeof(unsigned char*), cudaHostAllocDefault));
 
     for (int ipol = 0; ipol < nopols_; ipol++) {
         cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolbufsize_ * sizeof(unsigned char), cudaHostAllocDefault));
         cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolgpusize_ * sizeof(unsigned char)));
-        cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));      // remember we are unpacking to float
+        // NOTE: We are unpacking 2-bit number to floats - courtesy of cuFFT
+        cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));
         cudaCheckError(cudaMalloc((void**)&hdfft_[ipol], fftsize_ * sizeof(cufftComplex)));
     }
 
@@ -221,18 +226,6 @@ void GpuPool::Initialise(void)
 
     cudaCheckError(cudaMalloc((void**)&dfft_, nopols_ * sizeof(cufftComplex*)));
     cudaCheckError(cudaMemcpy(dfft_, hdfft_, nopols_ * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
-
-/*    for (int istoke = 0; istoke < nostokes_; istoke++) {
-        cudaCheckError(cudaMalloc((void**)&hdpower_[istoke], powersize_ * sizeof(float)));
-        // TODO: this should really be template-like - we may choose to scale to different number of bits
-        cudaCheckError(cudaMalloc((void**)&hdscaled_[istoke], scaledsize_ * sizeof(unsigned char)));
-    }
-*/
-//    cudaCheckError(cudaMalloc((void**)&dpower_, nostokes_ * sizeof(float*)));
-//    cudaCheckError(cudaMemcpy(dpower_, hdpower_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
-
-//    cudaCheckError(cudaMalloc((void**)&dscaled_, nostokes_ * sizeof(unsigned char*)));
-//    cudaCheckError(cudaMemcpy(dscaled_, hdscaled_, nostokes_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
 
     hdmeans_ = new float*[nostokes_];
     hdstdevs_ = new float*[nostokes_];
@@ -265,22 +258,7 @@ void GpuPool::Initialise(void)
         PrintSafe("Launching the GPU on pool", poolid_, "...");
     }
 
-    gpustreams_ = new cudaStream_t[nostreams_];
-    fftplans_ = new cufftHandle[nostreams_];
-    //fftsizes_ = new int[1];
-    // fftpoints_ is the number of output frequency channels - need to input 2 times that as we are doing R2C transform
-    //fftsizes_[0] = 2 * fftpoints_;
-    //fftbatchsize_ = unpackedsize_ / fftsizes_[0] / nostreams_;
-    //fftbatchsize_ = fftsize_ / fftsizes_[0] / nostreams_;
-
-    cout << fftsizes_[0] << " " << fftsize_ << " " << fftbatchsize_ << endl;
-
-    for (int igstream = 0; igstream < nostreams_; igstream++) {
-        cudaCheckError(cudaStreamCreate(&gpustreams_[igstream]));
-        cufftCheckError(cufftPlanMany(&fftplans_[igstream], 1, fftsizes_, NULL, 1, fftpoints_, NULL, 1, fftpoints_, CUFFT_R2C, fftbatchsize_));
-        cufftCheckError(cufftSetStream(fftplans_[igstream], gpustreams_[igstream]));
-    }
-
+    // NOTE: The block and thread calculations will be unnecessary with the optimised code
     int nokernels = 3;  // unpack, power and scale
     cudablocks_ = new unsigned int[nokernels];
     cudathreads_ = new unsigned int[nokernels];
@@ -292,7 +270,6 @@ void GpuPool::Initialise(void)
     int needblocks = (needthreads - 1) / cudathreads_[0] + 1;
 
     cudablocks_[0] = min(needblocks, 65536);
-    rem_ = needthreads - cudablocks_[0] * cudathreads_[0];
 
     perblock_ = 100;        // the number of OUTPUT time samples (after averaging) per block
     // NOTE: Have to be very careful with this number as vdiflen is not a power of 2
@@ -409,7 +386,7 @@ void GpuPool::DoGpuWork(int stream)
     bool inthis{false};
 
     int bufferidx;
-    int checkidx{5};    // hav many receive buffer samples to probe for the existance of the packet
+    int checkidx{5};    // how many receive buffer samples to probe for the existance of the packet
     int startnext;
     int startthis;
 
@@ -475,10 +452,12 @@ void GpuPool::DoGpuWork(int stream)
             frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
             //cout << frametime.framet << endl;
             for (int ipol = 0; ipol < nopols_; ipol++) {
+                // cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
                 cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }
 
-            UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_, 8 / inbits_);
+            // UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_, 8 / inbits_);
+            UnpackKernelOpt<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, accumulate_ * vdiflen_);
 /*            std::ofstream unpackedfile("unpacked.dat");
 
             float *outunpacked = new float[unpackedsize_];
@@ -492,8 +471,8 @@ void GpuPool::DoGpuWork(int stream)
             unpackedfile.close();
 */
             for (int ipol = 0; ipol < nopols_; ipol++) {
-                cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
-                //cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
+                //cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
+                cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
             }
 /*            std::ofstream fftedfile("ffted.dat");
 
@@ -511,7 +490,8 @@ void GpuPool::DoGpuWork(int stream)
 */
             //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_, stream * scaledsize_);
             // this version should really be used, as we want to save directly into the filterbank buffer
-            PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
+            // PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
+            PowerScaleKernelOpt<<<25, 512, 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
             filbuffer_ -> Update(frametime);
             // ScaleKernel<<<cudablocks_[2], cudathreads_[2], 0, gpustreams_[stream]>>>(dpower_, filbuffer_ -> GetFilPointer());
             cudaCheckError(cudaDeviceSynchronize());
@@ -601,7 +581,6 @@ void GpuPool::ReceiveData(int portid, int recport)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     // TODO: need to test how much we can squeeze out of the single core
-    // might depend on portid if can't pack everything in one core
     CPU_SET((int)(poolid_) * 3, &cpuset);
     // TODO: pass the thread ID properly
     int retaff = pthread_setaffinity_np(receivethreads_[portid].native_handle(), sizeof(cpu_set_t), &cpuset);

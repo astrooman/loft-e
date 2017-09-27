@@ -2,6 +2,13 @@
 
 #include <kernels.cuh>
 
+#define ACC 1024
+#define PERBLOCK 625
+#define TIMEAVG 8
+#define TIMESCALE 0.125
+#define FFTOUT 513
+#define FFTUSE 512
+
 // __restrict__ tells the compiler there is no memory overlap
 
 //__device__ float fftfactor = 1.0/256.0 * 1.0/256.0;
@@ -9,26 +16,6 @@ __device__ float fftfactor = 1.0;
 
 // TODO: have this change depending on the unpack factor
 __constant__ unsigned char kMask[] = {0x03, 0x0C, 0x30, 0xC0};
-
-/* __global__ void UnpackKernel(unsigned char **in, float **out, int pols, int perthread, int rem, size_t samples, int unpack)
-{
-    int idx = blockIdx.x * blockDim.x * perthread + threadIdx.x;
-    int skip = blockDim.x;
-
-    if (idx < blockDim.x * gridDim.x - (blockDim.x - rem)) {
-        if ((blockIdx.x == (gridDim.x -1)) && (rem != 0)) {
-            skip = rem;
-        }
-
-        for (int ipol = 0; ipol < pols; ipol++) {
-            for (int isamp = 0; isamp < perthread; isamp++) {
-                for (int ipack = 0; ipack < unpack; ipack++) {
-                    out[ipol][(idx + isamp * skip) * unpack + ipack] = static_cast<float>(static_cast<short>((in[ipol][idx + isamp * skip] & kMask[ipack]) >> ( 2 * ipack)));
-                }
-            }
-        }
-    }
-} */
 
 __global__ void UnpackKernel(unsigned char **in, float **out, int nopols, int bytesperthread, int rem, size_t samples, int unpack)
 {
@@ -44,7 +31,6 @@ __global__ void UnpackKernel(unsigned char **in, float **out, int nopols, int by
         }
     }
 }
-
 
 __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float **means, float **stdevs,
                                     int avgfreq, int avgtime, int nchans, int outsampperblock,
@@ -84,6 +70,77 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
             out[2][outidx + nogulps * gulpsize * nchans] = out[2][outidx];
             out[3][outidx + nogulps * gulpsize * nchans] = out[3][outidx];
         }
+    }
+}
+
+__global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples) {
+
+    // NOTE: Each thread in the block processes 625 samples
+    int idx = blockIdx.x * blockDim.x * PERBLOCK + threadIdx.x;
+    int tmod = threadIdx.x % 4;
+
+    // NOTE: Each thread can store one value
+    __shared__ unsigned char incoming[1024];
+
+    int outidx = blockIdx.x * blockDim.x * PERBLOCK * 4;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        if (idx < samples) {
+            for (int ipol = 0; ipol < 2; ++ipol) {
+                incoming[threadIdx.x] = in[ipol][idx];
+                __syncthreads();
+                int outidx2 = outidx + threadIdx.x;
+		for (int ichunk = 0; ichunk < 4; ++ichunk) {
+                    int inidx = threadIdx.x / 4 + ichunk * 256;
+                    unsigned char inval = incoming[inidx];
+                    out[ipol][outidx2] = static_cast<float>(static_cast<short>(((inval & kMask[tmod]) >> (2 * tmod))));
+                    outidx2 += 1024;
+                }
+            }
+        }
+        idx += blockDim.x;
+        outidx += blockDim.x * 4;
+    }
+}
+
+// NOTE: Does not do any frequency averaging
+// NOTE: Outputs only the total intensity and no other Stokes parameters
+__global__ void PowerScaleKernelOpt(cufftComplex **in, unsigned char **out, int nogulps, int gulpsize, int extra, unsigned int framet) {
+    // NOTE: framet should start at 0 and increase by accumulate every time this kernel is called
+    // NOTE: REALLY make sure it starts at 0
+    // NOTE: I'M SERIOUS - FRAME TIME CALCULATIONS ARE BASED ON THIS ASSUMPTION
+    unsigned int filtime = framet / ACC * gridDim.x * PERBLOCK + blockIdx.x * PERBLOCK;
+    unsigned int filidx;
+    unsigned int outidx;
+    int inidx = blockIdx.x * PERBLOCK * TIMEAVG * FFTOUT + threadIdx.x + 1;
+
+    float outvalue = 0.0f;
+    cufftComplex polval;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+
+        // NOTE: Read the data from the incoming array
+        for (int ipol = 0; ipol < 2; ++ipol) {
+            for (int iavg = 0; iavg < TIMEAVG; iavg++) {
+                polval = in[ipol][inidx + iavg * FFTOUT];
+                outvalue += polval.x * polval.x + polval.y * polval.y;
+            }
+
+        }
+
+        filidx = filtime % (nogulps * gulpsize);
+        outidx = filidx * FFTUSE + threadIdx.x;
+
+        outvalue *= TIMESCALE;
+
+        out[0][outidx] = outvalue;
+        // NOTE: Save to the extra part of the buffer
+        if (filidx < extra) {
+            out[0][outidx + nogulps * gulpsize * FFTUSE] = outvalue;
+        }
+        inidx += FFTOUT * TIMEAVG;
+        filtime++;
+        outvalue = 0.0;
     }
 }
 

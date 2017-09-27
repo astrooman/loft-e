@@ -65,10 +65,7 @@ class GpuPool
         unsigned int packperbuf_;
         unsigned int perblock_;
         unsigned int poolid_;
-        unsigned int powersize_;
-        unsigned int rem_;
         unsigned int sampperthread_;
-        unsigned int scaledsize_;
         unsigned int unpackedsize_;
 
         bool *readybufidx_;
@@ -86,9 +83,7 @@ class GpuPool
         float **hdmeans_;
         float **hdstdevs_;
         float **dunpacked_;
-        float **dpower_;
         float **hdunpacked_;
-        float **hdpower_;
 
         int *fftsizes_;
         int *sockfiledesc_;
@@ -99,9 +94,6 @@ class GpuPool
         unsigned char **hdinpol_;
         unsigned char **inpol_;
         unsigned char **recbufs_;
-        // TODO: this should really be template-like - we may choose to scale to different number of bits
-        unsigned char **dscaled_;
-        unsigned char **hdscaled_;
 
         unsigned int *cudablocks_;
         unsigned int *cudathreads_;
