@@ -282,6 +282,8 @@ void GpuPool::Initialise(void)
     //cout << "Unpack kernel grid: " << cudablocks_[0] << " blocks and " << cudathreads_[0] << " threads" <<endl;
     //cout << "Power kernel grid: " << cudablocks_[1] << " blocks and " << cudathreads_[1] << " threads" <<endl;
 
+    cudaCheckError(cudaGetLastError());
+
     for (int igstream = 0; igstream < nostreams_; igstream++) {
         gputhreads_.push_back(thread(&GpuPool::DoGpuWork, this, igstream));
     }
@@ -300,13 +302,8 @@ void GpuPool::Initialise(void)
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE;
 
-    cout << noports_ << endl;
-
     sockfiledesc_ = new int[noports_];
     recbufs_ = new unsigned char*[noports_];
-
-    cout << strip_[0] << endl;
-    cout << vdiflen_ << " " << headlen_ << endl;
 
     for (int iport = 0; iport < noports_; iport++)
         recbufs_[iport] = new unsigned char[vdiflen_ + headlen_];
@@ -315,15 +312,9 @@ void GpuPool::Initialise(void)
     string strport;
 
     for (int iport = 0; iport < noports_; iport++) {
-        cout << strip_[iport] << endl;
-        cout << strip_[iport].c_str() << endl;
-        cout.flush();
         ssport.str("");
         ssport << ports_[iport];
         strport = ssport.str();
-
-        cout << strip_[iport] << endl;
-        cout << strip_[iport].c_str() << endl;
 
         if((netrv = getaddrinfo(strip_[iport].c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
             PrintSafe("getaddrinfo() error:", gai_strerror(netrv), "on pool", poolid_);

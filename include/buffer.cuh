@@ -115,9 +115,6 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
     // size for a single Stokes parameter
     totalsamples_ = nogulps_ * gulpsamples_ + extrasamples_;
 
-    std::cout << totalsamples_ << std::endl;
-    std::cout << totalsamples_ * nochans_ << std::endl;
-
     gulptimes_ = new ObsTime[nogulps_];
     hdfilterbank_ = new BufferType*[nostokes_];
     state_ = new unsigned int[(int)totalsamples_];
@@ -126,12 +123,10 @@ void Buffer<BufferType>::Allocate(int accumulate, size_t extra, size_t gulp, int
     for (int istoke = 0; istoke < nostokes_; istoke++) {
         cudaCheckError(cudaMalloc((void**)&hdfilterbank_[istoke], totalsamples_ * nochans_ * sizeof(BufferType)));
         cudaCheckError(cudaHostAlloc((void**)&rambuffer_[istoke], 2 * (gulpsamples_ + extrasamples_) * nochans_ * sizeof(BufferType), cudaHostAllocDefault));
-        std::cout << "Stokes " << istoke << " done" << std::endl;
     }
 
     cudaCheckError(cudaMalloc((void**)&dfilterbank_, nostokes_ * sizeof(BufferType*)));
     cudaCheckError(cudaMemcpy(dfilterbank_, hdfilterbank_, nostokes_ * sizeof(BufferType*), cudaMemcpyHostToDevice));
-    std::cout << "Other memory done" << std::endl;
 }
 
 template<class BufferType>
