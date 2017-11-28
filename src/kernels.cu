@@ -2,12 +2,12 @@
 
 #include <kernels.cuh>
 
-#define ACC 1024
+#define NACCUMULATE 4000
 #define PERBLOCK 625
-#define TIMEAVG 8
+#define TIMEAVG 16
 #define TIMESCALE 0.125
-#define FFTOUT 513
-#define FFTUSE 512
+#define FFTOUT 257
+#define FFTUSE 256
 
 // __restrict__ tells the compiler there is no memory overlap
 
@@ -90,7 +90,7 @@ __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples)
                 incoming[threadIdx.x] = in[ipol][idx];
                 __syncthreads();
                 int outidx2 = outidx + threadIdx.x;
-		for (int ichunk = 0; ichunk < 4; ++ichunk) {
+                for (int ichunk = 0; ichunk < 4; ++ichunk) {
                     int inidx = threadIdx.x / 4 + ichunk * 256;
                     unsigned char inval = incoming[inidx];
                     out[ipol][outidx2] = static_cast<float>(static_cast<short>(((inval & kMask[tmod]) >> (2 * tmod))));
@@ -105,17 +105,19 @@ __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples)
 
 // NOTE: Does not do any frequency averaging
 // NOTE: Outputs only the total intensity and no other Stokes parameters
-__global__ void PowerScaleKernelOpt(cufftComplex **in, unsigned char **out, int nogulps, int gulpsize, int extra, unsigned int framet) {
+__global__ void PowerScaleKernelOpt(cufftComplex **in, float *means, float *stdevs, unsigned char **out, int nogulps, int gulpsize, int extra, unsigned int framet) {
     // NOTE: framet should start at 0 and increase by accumulate every time this kernel is called
     // NOTE: REALLY make sure it starts at 0
     // NOTE: I'M SERIOUS - FRAME TIME CALCULATIONS ARE BASED ON THIS ASSUMPTION
-    unsigned int filtime = framet / ACC * gridDim.x * PERBLOCK + blockIdx.x * PERBLOCK;
+    unsigned int filtime = framet / NACCUMULATE * gridDim.x * PERBLOCK + blockIdx.x * PERBLOCK;
     unsigned int filidx;
     unsigned int outidx;
     int inidx = blockIdx.x * PERBLOCK * TIMEAVG * FFTOUT + threadIdx.x + 1;
 
     float outvalue = 0.0f;
     cufftComplex polval;
+
+    int scaled = 0;
 
     for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
 
@@ -129,14 +131,21 @@ __global__ void PowerScaleKernelOpt(cufftComplex **in, unsigned char **out, int 
         }
 
         filidx = filtime % (nogulps * gulpsize);
-        outidx = filidx * FFTUSE + threadIdx.x;
-
+        outidx = filidx * FFTUSE + FFTUSE - threadIdx.x - 1;
         outvalue *= TIMESCALE;
 
-        out[0][outidx] = outvalue;
+        scaled = __float2int_ru((outvalue - means[FFTUSE - threadIdx.x - 1]) / stdevs[FFTUSE - threadIdx.x - 1] * 32.0f + 128.0f)
+
+        if (scaled > 255) {
+            scaled = 255;
+        } else if (scaled < 0) {
+            scaled = 0;
+        }
+
+        out[0][outidx] = (unsigned char)scaled;
         // NOTE: Save to the extra part of the buffer
         if (filidx < extra) {
-            out[0][outidx + nogulps * gulpsize * FFTUSE] = outvalue;
+            out[0][outidx + nogulps * gulpsize * FFTUSE] = (unsigned char)scaled;
         }
         inidx += FFTOUT * TIMEAVG;
         filtime++;
@@ -144,8 +153,6 @@ __global__ void PowerScaleKernelOpt(cufftComplex **in, unsigned char **out, int 
     }
 }
 
-// Initialise the scale factors
-// Use this instead of memset
 // NOTE: Memset is slower than custom kernels and not safe for anything else than int
 __global__ void ScaleFactorsInitKernel(float **means, float **rstdevs, int stokes) {
     // the scaling is (in - mean) * rstdev + 64.0f
@@ -161,48 +168,31 @@ __global__ void ScaleFactorsInitKernel(float **means, float **rstdevs, int stoke
     }
 }
 
-// NOTE: Filterbank data saved in the format t1c1,t1c2,t1c3,...
-// Need to transpose to t1c1,t2c1,t3c1,... for easy and efficient scaling kernel
-/*__global__ void TransposeKernel(float* __restrict__ in, float* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
+// NOTE: Uses a simple implementation of Chan's algorithm
+__global__ void GetScaleFactorsKernel(float *in, float *means, float *stdevs, float *factors, size_t processed) {
 
-    // very horrible implementation or matrix transpose
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int start = idx * ntimes;
-    for (int tsamp = 0; tsamp < ntimes; tsamp++) {
-        out[start + tsamp] = in[idx + tsamp * nchans];
+    // NOTE: Filterbank file format coming in
+    //float mean = indata[threadIdx.x];
+    float mean = 0.0f;
+    // NOTE: Depending whether I save STD or VAR at the end of every run
+    // float estd = stdev[threadIdx.x];
+    float estd = stdev[threadIdx.x] * stdev[threadIdx.x] * (processed - 1.0f);
+    float oldmean = means[threadIdx.x];
+
+    //float estd = 0.0f;
+    //float oldmean = 0.0;
+
+    float val = 0.0f;
+    float diff = 0.0;
+
+    for (int isamp = 0; isamp < 15625; ++isamp) {
+        val = indata[isamp * blockDim.x + threadIdx.x];
+        diff = val - oldmean;
+        mean = oldmean + diff * factors[processed + isamp + 1];
+        estd += diff * (val - mean);
+        oldmean = mean;
     }
-}*/
-
-__global__ void ScaleFactorsKernel(float *in, float **means, float **rstdevs, unsigned int nchans, unsigned int ntimes, int param) {
-    // calculates mean and standard deviation in every channel
-    // assumes the data has been transposed
-
-    // for now have one thread per frequency channel
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    float mean;
-    float variance;
-
-    float ntrec = 1.0f / (float)ntimes;
-    float ntrec1 = 1.0f / (float)(ntimes - 1.0f);
-
-    unsigned int start = idx * ntimes;
-    mean = 0.0f;
-    variance = 0.0;
-    // two-pass solution for now
-    for (int tsamp = 0; tsamp < ntimes; tsamp++) {
-        mean += in[start + tsamp] * ntrec;
-    }
-    means[param][idx] = mean;
-
-    for (int tsamp = 0; tsamp < ntimes; tsamp++) {
-        variance += (in[start + tsamp] - mean) * (in[start + tsamp] - mean);
-    }
-    variance *= ntrec1;
-    // reciprocal of standard deviation
-    // multiplied by the desired standard deviation of the scaled data
-    // reduces the number of operations that have to be done on the GPU
-    rstdevs[param][idx] = rsqrtf(variance) * 32.0f;
-    // to avoid inf when there is no data in the channel
-    if (means[param][idx] == 0)
-        rstdevs[param][idx] = 0;
+    means[threadIdx.x] = mean;
+    stdev[threadIdx.x] = sqrtf(estd / (float)(processed + 15625 - 1.0f));
+    // stdev[threadIdx.x] = estd;
 }

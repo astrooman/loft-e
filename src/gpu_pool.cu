@@ -50,7 +50,13 @@ using std::thread;
 using std::unique_ptr;
 using std::vector;
 
-#define HEADER 32
+// NOTE: These values will not change between runs, so we take them out of config and make constant
+#define FILCHANS 256
+#define HEADLEN 32
+#define NACCUMULATE 4000
+#define NOPOLS 2
+#define TIMEAVG 16
+#define VDIFLEN 8000
 
 /* ########################################################
 TODO: Too many copies - could I use move in certain places?
@@ -137,7 +143,7 @@ GpuPool::~GpuPool(void)
     cudaCheckError(cudaFree(dunpacked_));
     cudaCheckError(cudaFree(dinpol_));
 
-    for (int ipol = 0; ipol < nopols_; ipol++) {
+    for (int ipol = 0; ipol < NOPOLS; ipol++) {
         cudaCheckError(cudaFree(hdunpacked_[ipol]));
         cudaCheckError(cudaFree(hdinpol_[ipol]));
         cudaCheckError(cudaFreeHost(inpol_[ipol]));
@@ -148,7 +154,7 @@ GpuPool::~GpuPool(void)
     delete [] hdunpacked_;
     delete [] hdinpol_;
     delete [] framenumbers_;
-    delete [] readybufidx_;
+    delete [] readyrawidx_;
 
 }
 
@@ -183,19 +189,19 @@ void GpuPool::Initialise(void)
 
     // NOTE: We have to use one stream for the GPU filterbank processing
     // NOTE: One stream has to use two buffers side by side to cover for time spent on copying
-    inpolbufsize_ = 2 * accumulate_ * vdiflen_;
-    readybufidx_ = new bool[inpolbufsize_];
-    framenumbers_ = new unsigned int[2 * accumulate_];
-    inpolgpusize_ = accumulate_ * vdiflen_ * nostreams_;
+    rawbuffersize_ = 2 * NACCUMULATE * VDIFLEN;
+    readyrawidx_ = new bool[rawbuffersize_];
+    framenumbers_ = new unsigned int[2 * NACCUMULATE];
+    rawgpubuffersize_ = NACCUMULATE * VDIFLEN * nostreams_;
     // NOTE: 4 unpacked samples per incoming byte
-    unpackedsize_ = accumulate_ * vdiflen_ * nostreams_ * 4;
+    unpackedsize_ = NACCUMULATE * VDIFLEN * nostreams_ * 4;
 
     fftsizes_ = new int[1];
     // NOTE: Need twice as many input samples for the R2C transform
-    fftsizes_[0] = 2 * fftpoints_;
-    fftbatchsize_ = unpackedsize_ / fftsizes_[0] / nostreams_;
-    // NOTE: The output of the R2C transform is FFTSIZE / 2 + 1
-    fftsize_ = fftbatchsize_ * ((int)fftsizes_[0] / 2 + 1) * nostreams_;
+    fftsizes_[0] = 2 * FILCHANS;
+    fftbatchsize_ = unpackedsize_ / (2 * FILCHANS) / nostreams_;
+    // NOTE: The output of the R2C transform is  FILCHANS + 1
+    fftsize_ = fftbatchsize_ * (FILCHANS + 1) * nostreams_;
 
     fftplans_ = new cufftHandle[nostreams_];
     for (int igstream = 0; igstream < nostreams_; igstream++) {
@@ -204,45 +210,51 @@ void GpuPool::Initialise(void)
         cufftCheckError(cufftSetStream(fftplans_[igstream], gpustreams_[igstream]));
     }
 
-    hdinpol_ = new unsigned char*[nopols_];
-    hdunpacked_ = new float*[nopols_];
-    hdfft_ = new cufftComplex*[nopols_];
+    hdinpol_ = new unsigned char*[NOPOLS];
+    hdunpacked_ = new float*[NOPOLS];
+    hdfft_ = new cufftComplex*[NOPOLS];
 
-    cudaCheckError(cudaHostAlloc((void**)&inpol_, nopols_ * sizeof(unsigned char*), cudaHostAllocDefault));
+    cudaCheckError(cudaHostAlloc((void**)&inpol_, NOPOLS * sizeof(unsigned char*), cudaHostAllocDefault));
 
-    for (int ipol = 0; ipol < nopols_; ipol++) {
-        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], inpolbufsize_ * sizeof(unsigned char), cudaHostAllocDefault));
-        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], inpolgpusize_ * sizeof(unsigned char)));
+    for (int ipol = 0; ipol < NOPOLS; ipol++) {
+        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], rawbuffersize_ * sizeof(unsigned char), cudaHostAllocDefault));
+        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], rawgpubuffersize_ * sizeof(unsigned char)));
         // NOTE: We are unpacking 2-bit number to floats - courtesy of cuFFT
         cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));
         cudaCheckError(cudaMalloc((void**)&hdfft_[ipol], fftsize_ * sizeof(cufftComplex)));
     }
 
-    cudaCheckError(cudaMalloc((void**)&dinpol_, nopols_ * sizeof(unsigned char*)));
-    cudaCheckError(cudaMemcpy(dinpol_, hdinpol_, nopols_ * sizeof(unsigned char*), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMalloc((void**)&dinpol_, NOPOLS * sizeof(unsigned char*)));
+    cudaCheckError(cudaMemcpy(dinpol_, hdinpol_, NOPOLS * sizeof(unsigned char*), cudaMemcpyHostToDevice));
 
-    cudaCheckError(cudaMalloc((void**)&dunpacked_, nopols_ * sizeof(float*)));
-    cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, nopols_ * sizeof(float*), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMalloc((void**)&dunpacked_, NOPOLS * sizeof(float*)));
+    cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, NOPOLS * sizeof(float*), cudaMemcpyHostToDevice));
 
-    cudaCheckError(cudaMalloc((void**)&dfft_, nopols_ * sizeof(cufftComplex*)));
-    cudaCheckError(cudaMemcpy(dfft_, hdfft_, nopols_ * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMalloc((void**)&dfft_, NOPOLS * sizeof(cufftComplex*)));
+    cudaCheckError(cudaMemcpy(dfft_, hdfft_, NOPOLS * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
 
-    hdmeans_ = new float*[nostokes_];
-    hdstdevs_ = new float*[nostokes_];
+    // hdmeans_ = new float*[nostokes_];
+    // hdstdevs_ = new float*[nostokes_];
+    //
+    // for (int istoke = 0; istoke < nostokes_; istoke++) {
+    //     cudaCheckError(cudaMalloc((void**)&hdmeans_[istoke], FILCHANS * sizeof(float)));
+    //     cudaCheckError(cudaMalloc((void**)&hdstdevs_[istoke], FILCHANS * sizeof(float)));
+    // }
 
-    for (int istoke = 0; istoke < nostokes_; istoke++) {
-        cudaCheckError(cudaMalloc((void**)&hdmeans_[istoke], filchans_ * sizeof(float)));
-        cudaCheckError(cudaMalloc((void**)&hdstdevs_[istoke], filchans_ * sizeof(float)));
-    }
+    dmeans_.resize(FILCHANS);
+    dstdevs_.resize(FILCHANS);
 
-    cudaCheckError(cudaMalloc((void**)&dmeans_, nostokes_ * sizeof(float*)));
-    cudaCheckError(cudaMalloc((void**)&dstdevs_, nostokes_ * sizeof(float*)));
+    pdmeans_ = thrust::raw_pointer_cast(dmeans_.data());
+    pdstdevs_ = thrust::raw_pointer_cast(dstdevs_.data());
 
-    cudaCheckError(cudaMemcpy(dmeans_, hdmeans_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
-    cudaCheckError(cudaMemcpy(dstdevs_, hdstdevs_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
+//    cudaCheckError(cudaMalloc((void**)&dmeans_, nostokes_ * sizeof(float*)));
+//    cudaCheckError(cudaMalloc((void**)&dstdevs_, nostokes_ * sizeof(float*)));
+
+//    cudaCheckError(cudaMemcpy(dmeans_, hdmeans_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
+//    cudaCheckError(cudaMemcpy(dstdevs_, hdstdevs_, nostokes_ * sizeof(float*), cudaMemcpyHostToDevice));
 
     // NOTE: All the dedispersion done using 8bits input data
-    dedispplan_ = unique_ptr<DedispPlan>(new DedispPlan(filchans_, samptime_, freqtop_, freqoff_, gpuid_));
+    dedispplan_ = unique_ptr<DedispPlan>(new DedispPlan(FILCHANS, samptime_, freqtop_, freqoff_, gpuid_));
     dedispplan_ -> generate_dm_list(config_.dmstart, config_.dmend, 64.0f, 1.10f);
     //dedispextrasamples_ = dedispplan_ -> get_max_delay();
     dedispextrasamples_ = 5000;
@@ -251,7 +263,7 @@ void GpuPool::Initialise(void)
     // NOTE: Why is this even here?
     // std::this_thread::sleep_for(std::chrono::seconds(10));
     filbuffer_ = unique_ptr<Buffer<unsigned char>>(new Buffer<unsigned char>(gpuid_));
-    filbuffer_ -> Allocate(accumulate_, dedispextrasamples_, dedispgulpsamples_, filchans_, nogulps_, nostokes_, vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_);
+    filbuffer_ -> Allocate(NACCUMULATE, dedispextrasamples_, dedispgulpsamples_, FILCHANS, nogulps_, nostokes_, VDIFLEN * 8 / inbits_ / (2 * fftpoints_) / avgtime_);
 
     // STAGE: prepare and launch GPU work
     if (verbose_) {
@@ -264,8 +276,8 @@ void GpuPool::Initialise(void)
     cudathreads_ = new unsigned int[nokernels];
 
     // currently limit set to 1024, but can be lowered down, depending on the results of the tests
-    sampperthread_ = min(power2factor(accumulate_ * vdiflen_), 1024);
-    int needthreads = accumulate_ * vdiflen_ / sampperthread_;
+    sampperthread_ = min(power2factor(NACCUMULATE * VDIFLEN), 1024);
+    int needthreads = NACCUMULATE * VDIFLEN / sampperthread_;
     cudathreads_[0] = min(needthreads, 1024);
     int needblocks = (needthreads - 1) / cudathreads_[0] + 1;
 
@@ -273,10 +285,10 @@ void GpuPool::Initialise(void)
 
     perblock_ = 100;        // the number of OUTPUT time samples (after averaging) per block
     // NOTE: Have to be very careful with this number as vdiflen is not a power of 2
-    // This will cause problems when accumulate_ * 8 / inbits is less than 1 / (avgtime_ * perblock_ * fftsize_[0]
+    // This will cause problems when NACCUMULATE * 8 / inbits is less than 1 / (avgtime_ * perblock_ * fftsize_[0]
     // This will give a non-integer number of blocks
-    cudablocks_[1] = accumulate_ * vdiflen_ * 8 / inbits_ / avgtime_ / perblock_ / fftsizes_[0];
-    cudathreads_[1] = filchans_;        // each thread in the block will output a single AVERAGED frequency channel
+    cudablocks_[1] = NACCUMULATE * VDIFLEN * 8 / inbits_ / avgtime_ / perblock_ / fftsizes_[0];
+    cudathreads_[1] = FILCHANS;        // each thread in the block will output a single AVERAGED frequency channel
 
     // NOTE: This should only be used for debug purposes
     //cout << "Unpack kernel grid: " << cudablocks_[0] << " blocks and " << cudathreads_[0] << " threads" <<endl;
@@ -306,7 +318,7 @@ void GpuPool::Initialise(void)
     recbufs_ = new unsigned char*[noports_];
 
     for (int iport = 0; iport < noports_; iport++)
-        recbufs_[iport] = new unsigned char[vdiflen_ + headlen_];
+        recbufs_[iport] = new unsigned char[VDIFLEN + HEADLEN];
 
     ostringstream ssport;
     string strport;
@@ -383,9 +395,15 @@ void GpuPool::DoGpuWork(int stream)
 
     ObsTime frametime;
 
-    unsigned int perframe = vdiflen_ * 8 / inbits_ / (2 * fftpoints_) / avgtime_;     // the number of output time samples per frame
+    unsigned int perframe = VDIFLEN * 8 / inbits_ / (2 * fftpoints_) / avgtime_;     // the number of output time samples per frame
 
     int donebuffers = 0;
+
+    float *dscalepower;
+    size_t samplesperbuffer = NACCUMULATE * VDIFLEN * 4 / (2 * FILCHANS * TIMEAVG);
+    cudaCheckError(cudaMalloc(void**)&dscalepower, FILCHANS * )
+
+    size_t alreadyscaled = 0;
 
     while (working_) {
         // TODO: there must be a way to simplify this
@@ -395,15 +413,15 @@ void GpuPool::DoGpuWork(int stream)
         if (nostreams_ == 1) {      // different behaviour if we are using one stream only - need to check both buffers
             for (int ibuffer = 0; ibuffer < 2; ibuffer++) {
                 bufferidx = ibuffer;
-                startthis = (ibuffer + 1) * accumulate_ - checkidx;
-                startnext = ((ibuffer + 1) % 2) * accumulate_; // + checkidx;
+                startthis = (ibuffer + 1) * NACCUMULATE - checkidx;
+                startnext = ((ibuffer + 1) % 2) * NACCUMULATE; // + checkidx;
 
-                inthis = inthis || readybufidx_[startthis + checkidx - 1];
-                innext = innext || readybufidx_[startnext + checkidx];
+                inthis = inthis || readyrawidx_[startthis + checkidx - 1];
+                innext = innext || readyrawidx_[startnext + checkidx];
 
                 /*for (int iidx = 0; iidx < checkidx; iidx++) {
-                    inthis = inthis && readybufidx_[startthis + iidx];
-                    innext = innext && readybufidx_[startnext + iidx];
+                    inthis = inthis && readyrawidx_[startthis + iidx];
+                    innext = innext && readyrawidx_[startnext + iidx];
                 } */
 
 		if (inthis && innext)
@@ -414,24 +432,24 @@ void GpuPool::DoGpuWork(int stream)
             }
         } else {
             bufferidx = stream;
-            startthis = (stream + 1) * accumulate_ - checkidx;
-            startnext = ((stream + 1) % nostreams_) * accumulate_; // + checkidx;
+            startthis = (stream + 1) * NACCUMULATE - checkidx;
+            startnext = ((stream + 1) % nostreams_) * NACCUMULATE; // + checkidx;
 
             for (int iidx = 0; iidx < checkidx; iidx++) {
-                inthis = inthis || readybufidx_[startthis + iidx];
-                innext = innext || readybufidx_[startnext + iidx];
+                inthis = inthis || readyrawidx_[startthis + iidx];
+                innext = innext || readyrawidx_[startnext + iidx];
             }
         }
 
         if (inthis && innext) {
 
-            readybufidx_[startthis + checkidx - 1] = false;
-            readybufidx_[startnext + checkidx] = false;
+            readyrawidx_[startthis + checkidx - 1] = false;
+            readyrawidx_[startnext + checkidx] = false;
 
             /* for (int iidx = 0; iidx < checkidx; iidx++) {
                 // need to restart the state of what we have already sent for processing
-                readybufidx_[startthis + iidx] = false;
-                readybufidx_[startnext + iidx] = false;
+                readyrawidx_[startthis + iidx] = false;
+                readyrawidx_[startnext + iidx] = false;
             } */
 
             //cout << "Have the buffer " << bufferidx << ":" << startthis << ":" << startnext << endl;
@@ -440,15 +458,15 @@ void GpuPool::DoGpuWork(int stream)
             inthis = false;
             frametime.startepoch = starttime_.startepoch;
             frametime.startsecond = starttime_.startsecond;
-            frametime.framet = framenumbers_[bufferidx / nostreams_ * accumulate_];
+            frametime.framet = framenumbers_[bufferidx / nostreams_ * NACCUMULATE];
             //cout << frametime.framet << endl;
-            for (int ipol = 0; ipol < nopols_; ipol++) {
-                // cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
-                cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * inpolgpusize_ / nostreams_, inpol_[ipol] + bufferidx * inpolgpusize_ / nostreams_, accumulate_ * vdiflen_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
+            for (int ipol = 0; ipol < NOPOLS; ipol++) {
+                // cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * rawgpubuffersize_ / nostreams_, inpol_[ipol] + bufferidx * rawgpubuffersize_ / nostreams_, NACCUMULATE * VDIFLEN * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
+                cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * rawgpubuffersize_ / nostreams_, inpol_[ipol] + bufferidx * rawgpubuffersize_ / nostreams_, NACCUMULATE * VDIFLEN * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }
 
-            // UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, nopols_, sampperthread_, rem_, accumulate_ * vdiflen_, 8 / inbits_);
-            UnpackKernelOpt<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, accumulate_ * vdiflen_);
+            // UnpackKernel<<<cudablocks_[0], cudathreads_[0], 0, gpustreams_[stream]>>>(dinpol_, dunpacked_, NOPOLS, sampperthread_, rem_, NACCUMULATE * VDIFLEN, 8 / inbits_);
+            UnpackKernelOpt<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, NACCUMULATE * VDIFLEN);
 /*            std::ofstream unpackedfile("unpacked.dat");
 
             float *outunpacked = new float[unpackedsize_];
@@ -461,7 +479,7 @@ void GpuPool::DoGpuWork(int stream)
             delete [] outunpacked;
             unpackedfile.close();
 */
-            for (int ipol = 0; ipol < nopols_; ipol++) {
+            for (int ipol = 0; ipol < NOPOLS; ipol++) {
                 //cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol] + stream * unpackedsize_ / nostreams_, hdfft_[ipol] + stream * fftsize_ / nostreams_));
                 cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
             }
@@ -479,16 +497,27 @@ void GpuPool::DoGpuWork(int stream)
             fftedfile.close();
             working_ = false;
 */
-            //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_, stream * scaledsize_);
+            //PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, dscaled_, dmeans_, dstdevs_, avgfreq_, avgtime_, FILCHANS, perblock_, stream * fftsize_, stream * scaledsize_);
             // this version should really be used, as we want to save directly into the filterbank buffer
-            // PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, filchans_, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
-            PowerScaleKernelOpt<<<25, 512, 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
-            filbuffer_ -> Update(frametime);
-            // ScaleKernel<<<cudablocks_[2], cudathreads_[2], 0, gpustreams_[stream]>>>(dpower_, filbuffer_ -> GetFilPointer());
-            cudaCheckError(cudaDeviceSynchronize());
-            donebuffers++;
-            //if (donebuffers > 5)
-            //    working_ = false;
+            // PowerScaleKernel<<<cudablocks_[1], cudathreads_[1], 0, gpustreams_[stream]>>>(dfft_, filbuffer_ -> GetFilPointer(), dmeans_, dstdevs_, avgfreq_, avgtime_, FILCHANS, perblock_, stream * fftsize_ / nostreams_, nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet, perframe);
+
+            if (scaled_) {
+                PowerScaleKernelOpt<<<25, FILCHANS, 0, gpustreams_[stream]>>>(dfft_, pdmeans_, pdstdevs_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
+                filbuffer_ -> Update(frametime);
+                cudaStreamSynchronize(gpustreams_[stream]);
+                cudaCheckError(cudaGetLastError());
+            } else {
+                PowerKernelOpt<<<25, FILCHANS, 0, gpustreams_[stream]>>>(dfft_, dscalepower, FILCHANS);
+                cudaStreamSynchronize(gpustreams_[stream]);
+                cudaCheckError(cudaGetLastError());
+                GetScaleFactorsKernel<<<1, 256, 0, gpustreams_[stream]>>>(dscalepower, pdmeans_, pdstdevs_, pdfactors_, alreadyscaled);
+                cudaStreamSynchronize(gpustreams_[stream]);
+                cudaCheckError(cudaGetLastError());
+                alreadyscaled += 15625;
+                if (alreadyscaled >= scalesamples) {
+                    scaled_ = true;
+                }
+            }
         } else {
             std::this_thread::yield();
         }
@@ -525,7 +554,7 @@ void GpuPool::SendForDedispersion(cudaStream_t dstream)
     filheader.rdm = 0.0;
     filheader.ibeam = 1;
     filheader.nbits = 8;
-    filheader.nchans = filchans_;
+    filheader.nchans = FILCHANS;
     filheader.nifs = 1;
     filheader.data_type = 1;
     filheader.machine_id = 2;
@@ -602,7 +631,7 @@ void GpuPool::ReceiveData(int portid, int recport)
     if (recport == ports_[0]) {
         unsigned char *tempbuf = recbufs_[0];
         // this will wait forever if nothing is sent to the given port
-        numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen);
+        numbytes = recvfrom(sockfiledesc_[0], recbufs_[0], VDIFLEN + HEADLEN, 0, (struct sockaddr*)&theiraddr, &addrlen);
         starttime_.startepoch = (int)(tempbuf[7] & 0x3f);
         starttime_.startsecond = (int)(tempbuf[0] | (tempbuf[1] << 8) | (tempbuf[2] << 16) | ((tempbuf[3] & 0x3f) << 24));
         telescope_ = string() + (char)tempbuf[13] + (char)tempbuf[12];
@@ -612,7 +641,7 @@ void GpuPool::ReceiveData(int portid, int recport)
     // NOTE: Waiting for frame 0 to start the recording
     while (working_) {
         // NOTE: This will wait forever if nothing is sent to the given port - recvfrom is a blocking call
-        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], vdiflen_ * headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], VDIFLEN * HEADLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             PrintSafe("Error", errno, "on recvfrom on port", recport, "on pool", poolid_);
         }
         if (numbytes == 0)
@@ -626,7 +655,7 @@ void GpuPool::ReceiveData(int portid, int recport)
     }
 
     while(working_) {
-        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], vdiflen_ + headlen_, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
+        if ((numbytes = recvfrom(sockfiledesc_[portid], recbufs_[portid], VDIFLEN + HEADLEN, 0, (struct sockaddr*)&theiraddr, &addrlen)) == -1) {
             PrintSafe("Error", errno, "on recvfrom on port", recport, "on pool", poolid_);
         }
 
@@ -637,15 +666,15 @@ void GpuPool::ReceiveData(int portid, int recport)
         refsecond = (unsigned int)(recbufs_[portid][0] | (recbufs_[portid][1] << 8) | (recbufs_[portid][2] << 16) | ((recbufs_[portid][3] & 0x3f) << 24));
         frameno = (unsigned int)(recbufs_[portid][4] | (recbufs_[portid][5] << 8) | (recbufs_[portid][6] << 16));	// frame number in this second
         frameno += (refsecond - starttime_.startsecond - 1) * 4000;	// absolute frame number
-        //bufidx = (((int)frameno / accumulate_) % nostreams_) * accumulate_ + (frameno % accumulate_);
-        bufidx = frameno % (inpolbufsize_ / vdiflen_);
+        //bufidx = (((int)frameno / NACCUMULATE) % nostreams_) * NACCUMULATE + (frameno % NACCUMULATE);
+        bufidx = frameno % (rawbuffersize_ / VDIFLEN);
         //cout << "Buffer index: " << bufidx << ":" << threadid <<  ", frame " << frameno << endl;
         //cout.flush();
         framenumbers_[bufidx] = frameno;
         // TODO: Implement a consumer-producer model, similar to the PAF solution
-	    std::copy(recbufs_[portid] + headlen_, recbufs_[portid] + headlen_ + vdiflen_, inpol_[threadid] + vdiflen_ * bufidx);
+	    std::copy(recbufs_[portid] + HEADLEN, recbufs_[portid] + HEADLEN + VDIFLEN, inpol_[threadid] + VDIFLEN * bufidx);
         if ((threadid == 1) && (frameno > 10))
-            readybufidx_[bufidx] = true;
+            readyrawidx_[bufidx] = true;
 
     }
 }

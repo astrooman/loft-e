@@ -43,6 +43,9 @@ class GpuPool
 
         ObsTime starttime_;
 
+        thrust::device_vector<float> dmeans_;
+        thrust::device_vector<float> dstdevs_;
+
         unsigned int accumulate_;
         unsigned int availthreads_;
         unsigned int avgfreq_;
@@ -55,7 +58,7 @@ class GpuPool
         unsigned int filchans_;
         unsigned int gpuid_;
         unsigned int inbits_;
-        unsigned int inpolbufsize_;
+        unsigned int rawbuffersize_;
         unsigned int inpolgpusize_;
         unsigned int nogulps_;
         unsigned int nopols_;
@@ -68,7 +71,7 @@ class GpuPool
         unsigned int sampperthread_;
         unsigned int unpackedsize_;
 
-        bool *readybufidx_;
+        bool *readyrawidx_;
 
         cudaStream_t dedispstream_;
         cudaStream_t *gpustreams_;
@@ -78,12 +81,12 @@ class GpuPool
         cufftHandle *fftplans_;
 
         // unpacking into float for FFT purposes
-        float **dmeans_;
-        float **dstdevs_;
         float **hdmeans_;
         float **hdstdevs_;
         float **dunpacked_;
         float **hdunpacked_;
+        float *pdmeans_;
+        float *pdstdevs_;
 
         int *fftsizes_;
         int *sockfiledesc_;
