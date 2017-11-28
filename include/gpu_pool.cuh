@@ -32,9 +32,6 @@ class GpuPool
         static bool working_;
         bool scaled_;
 
-        const unsigned int headlen_;
-        const unsigned int vdiflen_;
-
         double freqtop_;
         double freqoff_;
         double samptime_;
@@ -45,21 +42,18 @@ class GpuPool
 
         thrust::device_vector<float> dmeans_;
         thrust::device_vector<float> dstdevs_;
+        thrust::device_vector<float> dfactors_;
 
-        unsigned int accumulate_;
         unsigned int availthreads_;
         unsigned int avgfreq_;
-        unsigned int avgtime_;
         unsigned int dedispextrasamples_;
         unsigned int dedispgulpsamples_;
         unsigned int fftbatchsize_;
         unsigned int fftpoints_;
         unsigned int fftsize_;
-        unsigned int filchans_;
         unsigned int gpuid_;
-        unsigned int inbits_;
         unsigned int rawbuffersize_;
-        unsigned int inpolgpusize_;
+        unsigned int rawgpubuffersize_;
         unsigned int nogulps_;
         unsigned int nopols_;
         unsigned int noports_;
@@ -69,6 +63,7 @@ class GpuPool
         unsigned int perblock_;
         unsigned int poolid_;
         unsigned int sampperthread_;
+        unsigned int scalesamples_;
         unsigned int unpackedsize_;
 
         bool *readyrawidx_;
@@ -85,6 +80,7 @@ class GpuPool
         float **hdstdevs_;
         float **dunpacked_;
         float **hdunpacked_;
+        float *pdfactors_;
         float *pdmeans_;
         float *pdstdevs_;
 

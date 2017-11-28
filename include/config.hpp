@@ -53,6 +53,7 @@ struct InConfig {
     unsigned int nostreams;         //!< Number of GPU streams to use for filterbank
     unsigned int record;            //!< Number of seconds to record
     unsigned int vdiflen;           //!< Length (in bytes) of the single VDIF packed excluding header
+    unsigned int scaleseconds;
     unsigned int timeavg;           //!< Number of time samples to average
 
 };
@@ -61,13 +62,13 @@ inline void SetDefaultConfig(InConfig &config) {
     config.test = false;
     config.verbose = false;
 
-    config.band = 128;
+    config.band = 64;
     config.dmend = 4000.0;
     config.dmstart = 0.0;
     config.ftop = 1400.0;
 
     config.accumulate = 4000;
-    config.fftsize = 512;
+    config.fftsize = 256;
     config.freqavg = 1;
     config.gulp = 131072;     // 2^17, equivalent to ~14s for 108us sampling time
     config.headlen = 32;
@@ -79,12 +80,13 @@ inline void SetDefaultConfig(InConfig &config) {
     config.nostreams = 1;
     config.outdir = "./";
     config.record = 300;            //!< Record 5 minutes of data
-    config.timeavg = 8;
+    config.scaleseconds = 5;
+    config.timeavg = 16;
     config.vdiflen = 8000;
 
     config.batch = config.nochans;
     config.foff = config.band / config.fftsize * (double)config.freqavg;
-    config.tsamp = (double)1.0 / (config.band * 1e+06) * config.fftsize * 2 * (double)config.timeavg;
+    config.tsamp = (double)1.0 / (2.0 * config.band * 1e+06) * config.fftsize * 2.0 * (double)config.timeavg;
     for (int ichan = 0; ichan < config.filchans; ichan++)
          (config.killmask).push_back((int)1);
 }
@@ -107,6 +109,7 @@ inline void PrintConfig(const InConfig &config) {
     time_t tmptime = std::chrono::system_clock::to_time_t(config.recordstart);
     std::cout << "\t - recording start time (experimental): " << std::asctime(std::gmtime(&tmptime)) << std::endl;
     std::cout << "\t - the number of seconds to record: " << config.record << std::endl;
+    std::cout << "\t - the number of seconds to use for scaling factors:" << config.scaleseconds << std::endl;
     std::cout << "\t - number of channels to average: " << config.freqavg << std::endl;
     std::cout << "\t - number of time samples to average:" << config.timeavg << std::endl;
     std::cout << "\t - dedisperse gulp size: " << config.gulp << std::endl;
@@ -185,6 +188,8 @@ inline void ReadConfig(std::string filename, InConfig &config) {
                 }
             } else if (paraname == "RECORD") {
                 config.record = std::stod(paravalue);
+            } else if (paraname == "SCALE") {
+                config.scaleseconds = std::stoi(paravalue);
             } else if (paraname == "TIME_AVERAGE") {
                 config.timeavg = (unsigned int)(std::stoi(paravalue));
             } else {

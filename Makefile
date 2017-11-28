@@ -6,7 +6,7 @@ OBJ_DIR = ./obj
 BIN_DIR = ./bin
 DEDISP_DIR = ./dedisp_paf
 CC=g++
-NVCC=/usr/local/cuda-7.5/bin/nvcc
+NVCC=/usr/local/cuda-8.0/bin/nvcc
 DEBUG=#-g -G
 
 INCLUDE = -I${INC_DIR} -I${BOOST_INC_DIR}

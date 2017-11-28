@@ -103,6 +103,35 @@ __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples)
     }
 }
 
+__global__ void PowerKernelOpt(cufftComplex **in, float *out) {
+    // NOTE: framet should start at 0 and increase by accumulate every time this kernel is called
+    // NOTE: REALLY make sure it starts at 0
+    // NOTE: I'M SERIOUS - FRAME TIME CALCULATIONS ARE BASED ON THIS ASSUMPTION
+    unsigned int outidx = blockIdx.x * PERBLOCK * FFTUSE + FFTUSE - threadIdx.x - 1;
+    unsigned int inidx = blockIdx.x * PERBLOCK * TIMEAVG * FFTOUT + threadIdx.x + 1;
+
+    float outvalue = 0.0f;
+    cufftComplex polval;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        // NOTE: Read the data from the incoming array
+        for (int ipol = 0; ipol < 2; ++ipol) {
+            for (int iavg = 0; iavg < TIMEAVG; iavg++) {
+                polval = in[ipol][inidx + iavg * FFTOUT];
+                outvalue += polval.x * polval.x + polval.y * polval.y;
+            }
+
+        }
+        // outidx = blockIdx.x * PERBLOCK * FFTUSE + isamp * FFTUSE + FFTUSE - threadIdx.x - 1;
+        outvalue *= TIMESCALE;
+        out[outidx] = outvalue;
+
+        inidx += FFTOUT * TIMEAVG;
+        outidx += FFTUSE;
+        outvalue = 0.0;
+    }
+}
+
 // NOTE: Does not do any frequency averaging
 // NOTE: Outputs only the total intensity and no other Stokes parameters
 __global__ void PowerScaleKernelOpt(cufftComplex **in, float *means, float *stdevs, unsigned char **out, int nogulps, int gulpsize, int extra, unsigned int framet) {
@@ -134,7 +163,7 @@ __global__ void PowerScaleKernelOpt(cufftComplex **in, float *means, float *stde
         outidx = filidx * FFTUSE + FFTUSE - threadIdx.x - 1;
         outvalue *= TIMESCALE;
 
-        scaled = __float2int_ru((outvalue - means[FFTUSE - threadIdx.x - 1]) / stdevs[FFTUSE - threadIdx.x - 1] * 32.0f + 128.0f)
+        scaled = __float2int_ru((outvalue - means[FFTUSE - threadIdx.x - 1]) / stdevs[FFTUSE - threadIdx.x - 1] * 32.0f + 128.0f);
 
         if (scaled > 255) {
             scaled = 255;
@@ -153,21 +182,6 @@ __global__ void PowerScaleKernelOpt(cufftComplex **in, float *means, float *stde
     }
 }
 
-// NOTE: Memset is slower than custom kernels and not safe for anything else than int
-__global__ void ScaleFactorsInitKernel(float **means, float **rstdevs, int stokes) {
-    // the scaling is (in - mean) * rstdev + 64.0f
-    // and I want to get the original in back in the first running
-    // will therefore set the mean to 64.0f and rstdev to 1.0f
-
-    // each thread responsible for one channel
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (int ii = 0; ii < stokes; ii++) {
-        means[ii][idx] = 64.0f;
-        rstdevs[ii][idx] = 1.0f;
-    }
-}
-
 // NOTE: Uses a simple implementation of Chan's algorithm
 __global__ void GetScaleFactorsKernel(float *in, float *means, float *stdevs, float *factors, size_t processed) {
 
@@ -176,7 +190,7 @@ __global__ void GetScaleFactorsKernel(float *in, float *means, float *stdevs, fl
     float mean = 0.0f;
     // NOTE: Depending whether I save STD or VAR at the end of every run
     // float estd = stdev[threadIdx.x];
-    float estd = stdev[threadIdx.x] * stdev[threadIdx.x] * (processed - 1.0f);
+    float estd = stdevs[threadIdx.x] * stdevs[threadIdx.x] * (processed - 1.0f);
     float oldmean = means[threadIdx.x];
 
     //float estd = 0.0f;
@@ -186,13 +200,13 @@ __global__ void GetScaleFactorsKernel(float *in, float *means, float *stdevs, fl
     float diff = 0.0;
 
     for (int isamp = 0; isamp < 15625; ++isamp) {
-        val = indata[isamp * blockDim.x + threadIdx.x];
+        val = in[isamp * blockDim.x + threadIdx.x];
         diff = val - oldmean;
         mean = oldmean + diff * factors[processed + isamp + 1];
         estd += diff * (val - mean);
         oldmean = mean;
     }
     means[threadIdx.x] = mean;
-    stdev[threadIdx.x] = sqrtf(estd / (float)(processed + 15625 - 1.0f));
+    stdevs[threadIdx.x] = sqrtf(estd / (float)(processed + 15625 - 1.0f));
     // stdev[threadIdx.x] = estd;
 }
