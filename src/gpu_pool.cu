@@ -41,6 +41,16 @@
 #include <unistd.h>
 #include <signal.h>
 
+// NOTE: DADA headers
+#include <assert.h>
+#include "ascii_header.h"
+#include "dada_client.h"
+#include "dada_def.h"
+#include "dada_hdu.h"
+#include "futils.h"
+#include "ipcio.h"
+#include "multilog.h"
+
 using std::cerr;
 using std::cout;
 using std::endl;
@@ -71,6 +81,63 @@ IMPORTANT: from what I seen in the system files:
 There is only one NUMA node.
 6 (sic!) physical cores
 ####################################################*/
+
+void DadaCudaHostTransfer(dada_client_t *client, void *to, size_t size, cudaStream_t stream) {
+    assert(client != 0);
+    DadaContext *tmpcts = reinterpret_cast<DadaContext*>(client -> context);
+    // NOTE: Need a way of letting this function know which part of the device buffer to dump
+    cudaCheckError(cudaMemcpyAsync(to, tmpctx -> devicememory), size, cudaMemcpyDeviceToHost, stream));
+    cudaCheckError(cudaStreamSynchronize(stream));
+}
+
+void DadaLofteOpen(dada_client_t *client) {
+    asser(client != 0);
+    DadaContext *tmpctx = reinterpret_cast<DadaContext*>(client -> context);
+
+    if (tmpctx -> verbose) {
+        PrintSafe("Setting up the DADA buffer...");
+    }
+
+    multilog(tmpctx -> mlog, LOG_INFO, "Running DadaLofteOpen\n");
+
+    // NOTE: transfer_bytes = 0 will make the dump run forever
+    client -> transfer_bytes = 0;
+    // TODO: FIgure out what this variable does
+    client -> optimal_bytes = 0;
+
+    tmpctx -> obsheader = (char*)malloc(sizeof(char) * DADA_DEFAULT_HEADER_SIZE);
+    if (!tmpctx -> obsheader) {
+        multilog(tmpctx -> mlog, LOG_ERR, "Could not allocate memory for the header\n");
+        return EXIT_FAILURE;
+    }
+
+    if (fileread(tmpctx -> headerfile, tmpctx -> obsheader, DADA_DEFAULT_HEADER_SIZE) < 0) {
+        multilog(tmpctx -> mlog, LOG_ERR, "Could not read the ASCII header from file %s\n", tmpctx -> headerfile);
+        return EXIT_FAILURE;
+    }
+
+    tmpctx -> headerwritten = 0;
+    return 0;
+}
+
+int DadaLofteClose(dada_client_t *client, uint64_t bytessent) {
+
+}
+
+int64_t DadaLofteWrite(dada_client_t *client, void *buffer, uint64_t bytes) {
+
+}
+
+int64_t DadaLofteWriteBlock(dada_client_t *client, void *buffer, uint64_t bytes, uint64_t blockidx) {
+    assert(client != 0);
+    DadaContext *tmpctx = reinterpret_cast<DadaContext*>(client -> context);
+
+    if (tmpctx -> verbose) {
+        PrintSafe("Transferring", bytes, "bytes to data block", blockidx);
+    }
+
+    DadaCudaHostTransfer(client, buffer, bytes, tmpctx -> stream);
+}
 
 struct FactorFunctor {
     __host__ __device__ float operator()(float val) {

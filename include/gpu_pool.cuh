@@ -15,6 +15,21 @@
 #include "dedisp/DedispPlan.hpp"
 #include "obs_time.hpp"
 
+// NOTE: DADA headers
+#include "dada_client.h"
+
+struct DadaContext {
+    bool verbose;
+    bool headerwritten;
+    dada_hdu_t *dhdu;
+    multilog_t *mlog;
+    cudaStream_t stream;
+    unsigned char *devicememory;
+
+    char *headerfile;
+    char *obsheader;
+};
+
 class GpuPool
 {
     private:
