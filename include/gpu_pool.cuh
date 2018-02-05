@@ -145,11 +145,6 @@ class GpuPool
             \param dstream stream number, used to access stream from mystreams array
         */
         void SendForDedispersion(cudaStream_t dstream);
-        //! Main GpuPool method.
-        /*! Responsible for setting up the GPU execution.
-            All memory allocated here, streams, cuFFT plans threads created here as well.
-        */
-        void Initialise(void);
         //! Handles the SIGINT signal. Must be static.
         /*!
             \param signum signal number - should be 2 for SIGINT

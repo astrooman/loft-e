@@ -10,6 +10,7 @@
 
 #include "config.hpp"
 #include "errors.hpp"
+#include "gpu_pool.cuh"
 #include "main_pool.cuh"
 
 using std::cerr;
@@ -37,21 +38,12 @@ int main(int argc, char *argv[])
                     return 1;
                 }
             }
-            if (std::string(argv[iarg]) == "-s") {     // the number of streams to use
-                iarg++;
-                config.nostreams = atoi(argv[iarg]);
-            } else if (std::string(argv[iarg]) == "-b") {     // the number of telescopes to accept the data from
-                iarg++;
-                config.nobeams = atoi(argv[iarg]);
-            } else if (std::string(argv[iarg]) == "-t") {     // the number of time sample to average
+            if (std::string(argv[iarg]) == "-t") {     // the number of time sample to average
                 iarg++;
                 config.timeavg = atoi(argv[iarg]);
             } else if (std::string(argv[iarg]) == "-f") {     // the number of frequency channels to average
                 iarg++;
                 config.freqavg = atoi(argv[iarg]);
-            } else if (std::string(argv[iarg]) == "-n") {    // the number of GPUs to use
-                iarg++;
-                config.nogpus = atoi(argv[iarg]);
             } else if (std::string(argv[iarg]) == "-o") {    // output directory for the filterbank files
                 iarg++;
                 struct stat chkdir;
@@ -65,9 +57,7 @@ int main(int argc, char *argv[])
                         cout << "Output directory does not exist! Will use default directory!";
                 }
             } else if (std::string(argv[iarg]) == "--gpuid") {
-                for (int igpu = 0; igpu < config.nogpus; igpu++) {
-                    iarg++;
-                    config.gpuids.push_back(atoi(argv[iarg]));
+                    config.gpuid = atoi(argv[iarg])
                 }
             } else if (std::string(argv[iarg]) == "--ip") {
                 for (int iip = 0; iip < config.nogpus; iip++) {
@@ -80,17 +70,14 @@ int main(int argc, char *argv[])
                 cout << "Options:\n"
                         << "\t -h --help - print out this message\n"
                         << "\t --config <file name> - configuration file\n"
-                        << "\t - THE USE OF FOLLOWING OPTIONS WILL BE PHASED OUT! USE CONFIG FILE INSTEAD!\n"
-                        << "\t -b - the number of beams to process\n"
-                        << "\t -c - the number of chunks to process\n"
+                        << "\t -p - wich half of the CPU to use"
+                        << "\t -c - combine bands into single filterbank\n"
                         << "\t -f - the number of frequency channels to average\n"
-                        << "\t -n - the number of GPUs to use\n"
                         << "\t -o <directory> - output directory\n"
-                        << "\t -s - the number of CUDA streams per GPU to use\n"
                         << "\t -t - the number of time samples to average\n"
                         << "\t -v - use verbose mode\n"
-                        << "\t --gpuid - GPU IDs to use - the number must be the same as 'n'\n"
-                        << "\t --ip - IPs to listen to - the number must be the same as 'n'\n\n";
+                        << "\t --gpuid - GPU ID to use\n"
+                        << "\t --ip - IP to listen on\n\n";
                 exit(EXIT_SUCCESS);
             }
         }
@@ -102,7 +89,7 @@ int main(int argc, char *argv[])
         PrintConfig(config);
     }
 
-    MainPool workpool(config);
+    GpuPool workpool(config);
 
     cudaDeviceReset();
 

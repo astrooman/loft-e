@@ -62,16 +62,6 @@ using std::vector;
 #define TIMEAVG 16
 #define VDIFLEN 8000
 
-/* ########################################################
-TODO: Too many copies - could I use move in certain places?
-#########################################################*/
-
-/*####################################################
-IMPORTANT: from what I seen in the system files:
-There is only one NUMA node.
-6 (sic!) physical cores
-####################################################*/
-
 struct FactorFunctor {
     __host__ __device__ float operator()(float val) {
         return val != 0 ? 1.0f/val : val;
@@ -80,16 +70,16 @@ struct FactorFunctor {
 
 bool GpuPool::working_ = true;
 
-GpuPool::GpuPool(int id, InConfig config) : avgfreq_(config.freqavg),
+GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
                                             config_(config),
                                             dedispgulpsamples_(config.gulp),
                                             fftpoints_(config.fftsize),
                                             freqoff_(config.foff),
-                                            gpuid_(config.gpuids[id]),
+                                            gpuid_(config.gpuid),
                                             nostokes_(config.nostokes),
                                             nostreams_(config.nostreams),
-                                            poolid_(id),
-                                            ports_(config.ports[id]),
+                                            poolid_(config.half),
+                                            ports_(config.ports),
                                             samptime_(config.tsamp),
                                             scaled_(false),
                                             strip_(config.ips),
@@ -98,57 +88,16 @@ GpuPool::GpuPool(int id, InConfig config) : avgfreq_(config.freqavg),
 {
     availthreads_ = thread::hardware_concurrency();
     if (availthreads_ == 0) {
-        cerr << "Could not obtain the number of cores on node " << poolid_ << "!\n";
-        cerr << "Will set to 6!";
+        cerr << "Could not obtain the number of cores for the telescope " << telescope_ << "!\n";
+        cerr << "Will set to 3!";
         // NOTE: This is true for LOFT-e machines for now - be careful as it might change in the future
-        availthreads_ = 6;
+        availthreads_ = 3;
     }
 
     if (verbose_) {
         PrintSafe("Starting the GPU pool", gpuid_, "...");
     }
-}
 
-GpuPool::~GpuPool(void)
-{
-    for (int ithread = 0; ithread < receivethreads_.size(); ithread++) {
-        receivethreads_[ithread].join();
-    }
-
-    for (int ithread = 0; ithread < gputhreads_.size(); ithread++) {
-        gputhreads_[ithread].join();
-    }
-
-//    cudaCheckError(cudaFree(dscaled_));
-//    cudaCheckError(cudaFree(dpower_));
-
-/*    for (int istoke = 0; istoke < nostokes_; istoke++) {
-        cudaCheckError(cudaFree(hdscaled_[istoke]));
-        cudaCheckError(cudaFree(hdpower_[istoke]));
-    }
-*/
-    cudaCheckError(cudaFree(dfft_));
-    cudaCheckError(cudaFree(dunpacked_));
-    cudaCheckError(cudaFree(dinpol_));
-
-    for (int ipol = 0; ipol < NOPOLS; ipol++) {
-        cudaCheckError(cudaFree(hdunpacked_[ipol]));
-        cudaCheckError(cudaFree(hdinpol_[ipol]));
-        cudaCheckError(cudaFreeHost(inpol_[ipol]));
-    }
-
-    cudaCheckError(cudaFreeHost(inpol_));
-
-    delete [] hdunpacked_;
-    delete [] hdinpol_;
-    delete [] framenumbers_;
-    delete [] readyrawidx_;
-
-}
-
-void GpuPool::Initialise(void)
-
-{
     noports_ = ports_.size();
 
     signal(SIGINT, GpuPool::HandleSignal);
@@ -318,6 +267,43 @@ void GpuPool::Initialise(void)
 
     for (int iport = 0; iport < noports_; iport++)
         receivethreads_.push_back(thread(&GpuPool::ReceiveData, this, iport, ports_[iport]));
+
+}
+
+GpuPool::~GpuPool(void)
+{
+    for (int ithread = 0; ithread < receivethreads_.size(); ithread++) {
+        receivethreads_[ithread].join();
+    }
+
+    for (int ithread = 0; ithread < gputhreads_.size(); ithread++) {
+        gputhreads_[ithread].join();
+    }
+
+//    cudaCheckError(cudaFree(dscaled_));
+//    cudaCheckError(cudaFree(dpower_));
+
+/*    for (int istoke = 0; istoke < nostokes_; istoke++) {
+        cudaCheckError(cudaFree(hdscaled_[istoke]));
+        cudaCheckError(cudaFree(hdpower_[istoke]));
+    }
+*/
+    cudaCheckError(cudaFree(dfft_));
+    cudaCheckError(cudaFree(dunpacked_));
+    cudaCheckError(cudaFree(dinpol_));
+
+    for (int ipol = 0; ipol < NOPOLS; ipol++) {
+        cudaCheckError(cudaFree(hdunpacked_[ipol]));
+        cudaCheckError(cudaFree(hdinpol_[ipol]));
+        cudaCheckError(cudaFreeHost(inpol_[ipol]));
+    }
+
+    cudaCheckError(cudaFreeHost(inpol_));
+
+    delete [] hdunpacked_;
+    delete [] hdinpol_;
+    delete [] framenumbers_;
+    delete [] readyrawidx_;
 
 }
 

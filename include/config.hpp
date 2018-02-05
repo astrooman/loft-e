@@ -30,20 +30,21 @@ struct InConfig {
 
     std::string outdir;
 
-    std::vector<int> gpuids;
     std::vector<std::string> ips;
     std::vector<int> killmask;
-    std::vector<std::vector<int>> ports;
+    std::vector<int> ports;
 
 
-    unsigned int accumulate;        //!< ??
-    unsigned int batch;             //!< ??
+    unsigned int accumulate;        //!< MOVED TO DEFINE
+    unsigned int batch;             //!< NOT IN USE
     unsigned int fftsize;           //!< Single FFT size
     unsigned int filchans;          //!< Number of output filterbank channels
     unsigned int freqavg;           //!< Number of frequency channels to average
+    unsigned int gpuid;             //!< Id of the GPU to use
     unsigned int gulp;              //!< Dedispersion gulp size
-    unsigned int headlen;           //!< Length (in bytes) of the VDIF header
-    unsigned int inbits;            //!< ??
+    unsigned int half;              //!< Which half of the CPU to use
+    unsigned int headlen;           //!< MOVED TO DEFINE
+    unsigned int inbits;            //!< MOVED TO DEFINE
     unsigned int nobeams;           //!< Number of beams per node
     unsigned int nochans;           //!< number of 1MHz channels - REMOVE
     unsigned int nogpus;            //!< number of GPUs to use - REMOVE
@@ -52,8 +53,8 @@ struct InConfig {
     unsigned int nostokes;          //!< Number of Stokes parameters to compute
     unsigned int nostreams;         //!< Number of GPU streams to use for filterbank
     unsigned int record;            //!< Number of seconds to record
-    unsigned int vdiflen;           //!< Length (in bytes) of the single VDIF packed excluding header
-    unsigned int scaleseconds;
+    unsigned int vdiflen;           //!< MOVED TO DEFINE
+    unsigned int scaleseconds;      //!< Number of seconds to use for the incoming data
     unsigned int timeavg;           //!< Number of time samples to average
 
 };
