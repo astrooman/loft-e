@@ -82,7 +82,7 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
                                             ports_(config.ports),
                                             samptime_(config.tsamp),
                                             scaled_(false),
-                                            strip_(config.ips),
+                                            strip_(config.ip),
                                             telescope_("NT"),
                                             verbose_(config.verbose)
 {
@@ -106,7 +106,7 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     // * 3 as there are 3 cores available for each telescope/GPU
-    CPU_SET((int)(gpuid_) * 3, &cpuset);
+    CPU_SET((int)(poolid_) * 3, &cpuset);
     int retaff = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 
     if (retaff != 0) {
@@ -232,7 +232,7 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
         ssport << ports_[iport];
         strport = ssport.str();
 
-        if((netrv = getaddrinfo(strip_[iport].c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
+        if((netrv = getaddrinfo(strip_.c_str(), strport.c_str(), &hints, &servinfo)) != 0) {
             PrintSafe("getaddrinfo() error:", gai_strerror(netrv), "on pool", poolid_);
         }
 
@@ -312,7 +312,7 @@ void GpuPool::DoGpuWork(int stream)
     // let us hope one stream will be enough or we will have to squeeze multiple streams into single CPU core
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET((int)gpuid_ * 3 + 1, &cpuset);
+    CPU_SET((int)poolid_ * 3 + 1, &cpuset);
 
     int retaff = pthread_setaffinity_np(gputhreads_[stream].native_handle(), sizeof(cpu_set_t), &cpuset);
 
@@ -434,7 +434,7 @@ void GpuPool::SendForDedispersion(cudaStream_t dstream)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET((int)gpuid_ * 3 + 2, &cpuset);
+    CPU_SET((int)poolid_ * 3 + 2, &cpuset);
     int retaff = pthread_setaffinity_np(gputhreads_[gputhreads_.size() - 1].native_handle(), sizeof(cpu_set_t), &cpuset);
 
     if (retaff != 0) {

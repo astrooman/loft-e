@@ -11,7 +11,6 @@
 #include "config.hpp"
 #include "errors.hpp"
 #include "gpu_pool.cuh"
-#include "main_pool.cuh"
 
 using std::cerr;
 using std::cout;
@@ -57,13 +56,9 @@ int main(int argc, char *argv[])
                         cout << "Output directory does not exist! Will use default directory!";
                 }
             } else if (std::string(argv[iarg]) == "--gpuid") {
-                    config.gpuid = atoi(argv[iarg])
-                }
+                    config.gpuid = atoi(argv[iarg]);
             } else if (std::string(argv[iarg]) == "--ip") {
-                for (int iip = 0; iip < config.nogpus; iip++) {
-                    iarg++;
-                    config.ips.push_back(std::string(argv[iarg]));
-                }
+                    config.ip = std::string(argv[iarg]);
             } else if (std::string(argv[iarg]) == "-v") {
                 config.verbose = true;
             } else if ((std::string(argv[iarg]) == "-h") || (std::string(argv[iarg]) == "--help")) {

@@ -17,7 +17,7 @@ NVCC_FLAG = -gencode=arch=compute_52,code=sm_52 --std=c++11 -lcufft -Xcompiler $
 
 CPPOBJECTS = ${OBJ_DIR}/DedispPlan.o
 
-CUDAOBJECTS = ${OBJ_DIR}/lofte.o ${OBJ_DIR}/gpu_pool.o ${OBJ_DIR}/kernels.o ${OBJ_DIR}/dedisp.o ${OBJ_DIR}/main_pool.o
+CUDAOBJECTS = ${OBJ_DIR}/lofte.o ${OBJ_DIR}/gpu_pool.o ${OBJ_DIR}/kernels.o ${OBJ_DIR}/dedisp.o 
 
 
 all: lofte

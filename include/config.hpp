@@ -30,7 +30,7 @@ struct InConfig {
 
     std::string outdir;
 
-    std::vector<std::string> ips;
+    std::string ip;
     std::vector<int> killmask;
     std::vector<int> ports;
 
@@ -96,15 +96,10 @@ inline void PrintConfig(const InConfig &config) {
 
     std::cout << "Configuration overview: " << std::endl;
     std::cout << "\t - the number of GPUs to use: " << config.nogpus << std::endl;
-    std::cout << "\t - IPs to listen on: " << std::endl;
-    for (auto ip : config.ips) {
-        std::cout << "\t\t * " << ip << std::endl;
-    }
+    std::cout << "\t - IP to listen on: " << config.ip << std::endl;
     std::cout << "\t - ports to listen on: " << std::endl;
-    for (auto poolports : config.ports) {
-        for (auto port : poolports) {
-            std::cout << "\t\t * " << port << std::endl;
-        }
+    for (auto port : config.ports) {
+        std::cout << "\t\t * " << port << std::endl;
     }
     std::cout << "\t - output directory: " << config.outdir << std::endl;
     time_t tmptime = std::chrono::system_clock::to_time_t(config.recordstart);
@@ -141,16 +136,10 @@ inline void ReadConfig(std::string filename, InConfig &config) {
                 config.freqavg = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "DEDISPGULP") {
                 config.gulp = (unsigned int)(std::stoi(paravalue));
-            } else if (paraname == "GPUIDS") {
-                std::istringstream svalue(paravalue);
-                std::string strgpu;
-                while(std::getline(svalue, strgpu, ','))
-                    config.gpuids.push_back(std::stoi(strgpu));
-            } else if (paraname == "IPS") {
-                std::istringstream svalue(paravalue);
-                std::string strip;
-                while(std::getline(svalue, strip, ','))
-                    config.ips.push_back(strip);
+            } else if (paraname == "GPUID") {
+                config.gpuid = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "IP") {
+                config.ip = paravalue;
             } else if (paraname == "NO1MHZCHANS") {
                 config.nochans = (unsigned int)(std::stoi(paravalue));
                 config.batch = config.nochans;
@@ -182,10 +171,9 @@ inline void ReadConfig(std::string filename, InConfig &config) {
                     std::vector<int> vtmp;
                     std::istringstream ssports(ipports);
                     std::string singleport;
-                    while(std::getline(ssports, singleport, ','))
-                        vtmp.push_back(stoi(singleport));
-
-                    config.ports.push_back(vtmp);
+                    while(std::getline(ssports, singleport, ',')) {
+                        config.ports.push_back(stoi(singleport));
+                    }
                 }
             } else if (paraname == "RECORD") {
                 config.record = std::stod(paravalue);

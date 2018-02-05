@@ -24,7 +24,7 @@ class GpuPool
         std::unique_ptr<DedispPlan> dedispplan_;
 
         std::vector<int> ports_;
-        std::vector<std::string> strip_;
+        std::string strip_;
         std::vector<std::thread> gputhreads_;
         std::vector<std::thread> receivethreads_;
 
@@ -108,10 +108,9 @@ class GpuPool
         GpuPool(void) = delete;
         //! A constructor.
         /*!
-            \param id the GPU id to be set using cudaSetDevice()
             \param config the configuration structure
         */
-        GpuPool(int id, InConfig config);
+        GpuPool(InConfig config);
         ~GpuPool(void);
         //! A copy constructor.
         /*!
