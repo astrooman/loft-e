@@ -1,13 +1,16 @@
-#include <stdio.h>
+kMask#include <stdio.h>
 
 #include <kernels.cuh>
 
+#define MIDAVG 4
 #define NACCUMULATE 4000
+#define NACCPROCESS 1000
 #define PERBLOCK 625
 #define TIMEAVG 16
 #define TIMESCALE 0.125
 #define FFTOUT 257
 #define FFTUSE 256
+#define VDIFLEN 8000
 
 // __restrict__ tells the compiler there is no memory overlap
 
@@ -73,6 +76,36 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
     }
 }
 
+__global__ void UnpackKernelOptSmall(unsigned char *in, float *out, size_t samples) {
+
+    // NOTE: Each thread in the block processes 625 samples
+    int idx = blockIdx.x * blockDim.x * PERBLOCK + threadIdx.x;
+    int tmod = threadIdx.x % 4;
+    int tdiv = threadIdx.x >> 2;
+    int outidx2 = 0;
+    unsigned char inval = 0;
+
+    __shared__ unsigned char incoming[1024];
+
+    int outidx = blockIdx.x * blockDim.x * PERBLOCK * 4;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        if (idx < samples) {
+            incoming[threadIdx.x] = in[idx];
+            __syncthreads();
+            outidx2 = outidx + threadIdx.x;
+            for (int ichunk = 0; ichunk < 4; ++ichunk) {
+                int inidx = tdiv + ichunk * 256;
+                inval = incoming[inidx];
+                out[outidx2] = static_cast<float>(static_cast<short>(((inval & kMask[tmod]) >> (2 * tmod))));
+                outidx2 += 1024;
+            }
+        }
+        idx += blockDim.x;
+        outidx += blockDim.x * 4;
+    }
+}
+
 __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples) {
 
     // NOTE: Each thread in the block processes 625 samples
@@ -100,6 +133,31 @@ __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples)
         }
         idx += blockDim.x;
         outidx += blockDim.x * 4;
+    }
+}
+
+__global__ void PowerKernelOptSmall(cufftComplex *in, float *out) {
+    int band = threadIdx.x / 256;
+    int threadinband = threadIdx.x % 256;
+    float sum = 0.0f;
+    cufftComplex polval;
+    int polskip = NACCPROCESS * VDIFLEN * 4 / (2 * FFTUSE) * FFTOUT;
+
+    int inidx = band * 2 * polskip + blockIdx.x * PERBLOCK * MIDAVG * FFTOUT + threadinband + 1;
+    int outidx = band * polskip / 4 + blockIdx.x * PERBLOCK * FFTUSE + threadinband;
+
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        for (int iavg = 0; iavg < MIDAVG; ++iavg) {
+            polval = in[inidx + iavg * FFTOUT];
+            sum += polval.x * polval.x + polval.y * polval.y;
+            polval = in[inidx + polskip + iavg * FFTOUT];
+            sum += polval.x * polval.x + polval.y * polval.y;
+        }
+        out[outidx] = sum;
+        sum = 0.0f;
+        inidx += MIDAVG * FFTOUT;
+        outidx += FFTUSE;
     }
 }
 

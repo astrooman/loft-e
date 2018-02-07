@@ -57,6 +57,7 @@ using std::vector;
 #define HEADLEN 32
 #define INBITS 2
 #define NACCUMULATE 4000
+#define NACCPROCESS 1000
 #define NOPOLS 2
 #define PERBLOCK 625
 #define TIMEAVG 16
@@ -76,6 +77,7 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
                                             fftpoints_(config.fftsize),
                                             freqoff_(config.foff),
                                             gpuid_(config.gpuid),
+                                            nobands_(config.bands.size()),
                                             nostokes_(config.nostokes),
                                             nostreams_(config.nostreams),
                                             poolid_(config.half),
@@ -126,12 +128,13 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
 
     // NOTE: We have to use one stream for the GPU filterbank processing
     // NOTE: One stream has to use two buffers side by side to cover for time spent on copying
-    rawbuffersize_ = 2 * NACCUMULATE * VDIFLEN;
+    rawbuffersize_ = 2 * NACCUMULATE * VDIFLEN * nobands__;
     readyrawidx_ = new bool[rawbuffersize_];
-    framenumbers_ = new unsigned int[2 * NACCUMULATE];
-    rawgpubuffersize_ = NACCUMULATE * VDIFLEN * nostreams_;
+    framenumbers_ = new unsigned int[2 * NACCUMULATE * nobands__];
+    rawgpubuffersize_ = NACCUMULATE * VDIFLEN * nobands__ * nostreams_;
     // NOTE: 4 unpacked samples per incoming byte
-    unpackedsize_ = NACCUMULATE * VDIFLEN * nostreams_ * 4;
+    // NOTE: Will have to run this is chunks of 1000 frames each to meet the memory constraints
+    unpackedsize_ = NACCPROCESS * VDIFLEN * nobands__ * nostreams_ * 4;
 
     fftsizes_ = new int[1];
     // NOTE: Need twice as many input samples for the R2C transform
@@ -344,6 +347,8 @@ void GpuPool::DoGpuWork(int stream)
     size_t samplesperbuffer = NACCUMULATE * VDIFLEN * 4 / (2 * FILCHANS * TIMEAVG);
     cudaCheckError(cudaMalloc((void**)&dscalepower, FILCHANS * samplesperbuffer * sizeof(float)));
 
+    unsigned char* preunpacked = new unsigned char[NACCUMULATE * VDIFLEN * NOPOLS * nobands__];
+
     size_t alreadyscaled = 0;
 
     while (working_) {
@@ -394,11 +399,28 @@ void GpuPool::DoGpuWork(int stream)
             frametime.startsecond = starttime_.startsecond;
             frametime.framet = framenumbers_[bufferidx / nostreams_ * NACCUMULATE];
             //cout << frametime.framet << endl;
+            // TODO: Simplify this - we will always get two polarisations
             for (int ipol = 0; ipol < NOPOLS; ipol++) {
                 cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * rawgpubuffersize_ / nostreams_, inpol_[ipol] + bufferidx * rawgpubuffersize_ / nostreams_, NACCUMULATE * VDIFLEN * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
             }
 
-            UnpackKernelOpt<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, NACCUMULATE * VDIFLEN);
+            for (int ipol = 0; ipol < NOPOLS; ++ipol) {
+                cudaCheckError(cudaMemcpyAsync(preunpacked[ipol], inpol[ipol] + bufferidx * ))
+            }
+
+            // TODO: Redesign the receive buffers
+
+            for (int iband = 0; iband < nobands_; ++iband) {
+                std::copy(rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * iband, rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * (iband + 1), preunpacked + NACCUMULATE * VDIFLEN * NOPOLS * iband);
+            }
+
+
+            for (int ichunk = 0; ichunk < (NACCUMULATE / NACCPROCESS); ++ichunk) {
+                UnpackKernelOptSmall<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, NACCPROCESS * VDIFLEN * NOPOLS * nobands_);
+                cufftCheckError(cufftExecR2C(fftplan_, dunpacked_, dffted_));
+                PowerKernelOptSmall<<<25, 512, 0>>>
+            }
+
 
             for (int ipol = 0; ipol < NOPOLS; ipol++) {
                 cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));

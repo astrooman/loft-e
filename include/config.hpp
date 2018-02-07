@@ -16,6 +16,7 @@
 #include <heimdall/params.hpp>
 
 struct InConfig {
+    bool combine;
     bool test;
     bool verbose;
 
@@ -130,8 +131,21 @@ inline void ReadConfig(std::string filename, InConfig &config) {
                 config.dmend = stod(paravalue);
             } else if (paraname == "DMSTART") {
                 config.dmstart = stod(paravalue);
+            } else if (paraname == "FCENT") {
+                std::istringstream ssvalue(paravalue);
+                std::string bandcentre;
+                while(std::getline(ssvalue, bandcentre, ',')) {
+                    config.centres.push_back(std::stod(bandcentre)));
+                }
+            }
             } else if (paraname == "FFTSIZE") {
                 config.fftsize = (unsigned int)(std::stoi(paravalue));
+            } else if (paraname == "FOFF") {
+                std::istringstream ssvalue(paravalue);
+                std::string bandoff;
+                while(std::getline(ssvalue, bandoff, ',')) {
+                    config.bands.push_back(std::stod(bandoff));
+                }
             } else if (paraname == "FREQAVG") {
                 config.freqavg = (unsigned int)(std::stoi(paravalue));
             } else if (paraname == "DEDISPGULP") {

@@ -40,6 +40,8 @@ int main(int argc, char *argv[])
             if (std::string(argv[iarg]) == "-t") {     // the number of time sample to average
                 iarg++;
                 config.timeavg = atoi(argv[iarg]);
+            } else if (std::string(argv[iarg]) == "-c") {
+                config.combine = true;
             } else if (std::string(argv[iarg]) == "-f") {     // the number of frequency channels to average
                 iarg++;
                 config.freqavg = atoi(argv[iarg]);
@@ -77,6 +79,18 @@ int main(int argc, char *argv[])
             }
         }
 
+    }
+
+    // TODO: Add more error testing, so that we actually exit gently and not with segfaults and core dumps
+    if (config.combine) {
+        // NOTE: We need at least 2 bands to combine something
+        if ((config.bands.size() < 2) || (config.centres.size() < 2)) {
+            cerr << "ERROR! Need at least 2 bands to combine!" << endl;
+            exit(EXIT_FAILURE);
+        } else if ((config.bands.size()) != (config.centres.size())) {
+            cerr << "ERROR! The number of band centres has to be the same as the number of bands!" << endl;
+            exit(EXIT_FAILURE);
+        }
     }
 
     if (config.verbose) {

@@ -54,6 +54,7 @@ class GpuPool
         unsigned int gpuid_;
         unsigned int rawbuffersize_;
         unsigned int rawgpubuffersize_;
+        unsigned int nobands_;
         unsigned int nogulps_;
         unsigned int nopols_;
         unsigned int noports_;
