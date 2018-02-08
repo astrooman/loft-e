@@ -11,6 +11,8 @@ kMask#include <stdio.h>
 #define FFTOUT 257
 #define FFTUSE 256
 #define VDIFLEN 8000
+// NOTE: The number of time samples that come out of the fully averaged time series
+#define AVGOUTSAMPS 15625
 
 // __restrict__ tells the compiler there is no memory overlap
 
@@ -76,7 +78,7 @@ __global__ void PowerScaleKernel(cufftComplex **in, unsigned char **out, float *
     }
 }
 
-__global__ void UnpackKernelOptSmall(unsigned char *in, float *out, size_t samples) {
+__global__ void UnpackKernelSmall(unsigned char *in, float *out, size_t samples) {
 
     // NOTE: Each thread in the block processes 625 samples
     int idx = blockIdx.x * blockDim.x * PERBLOCK + threadIdx.x;
@@ -136,15 +138,23 @@ __global__ void UnpackKernelOpt(unsigned char **in, float **out, size_t samples)
     }
 }
 
-__global__ void PowerKernelOptSmall(cufftComplex *in, float *out) {
+__global__ void PowerKernelSmall(cufftComplex *in, float *out, int ichunk) {
     int band = threadIdx.x / 256;
     int threadinband = threadIdx.x % 256;
     float sum = 0.0f;
     cufftComplex polval;
-    int polskip = NACCPROCESS * VDIFLEN * 4 / (2 * FFTUSE) * FFTOUT;
+    int inpolskip = NACCPROCESS * VDIFLEN * 4 / (2 * FFTUSE) * FFTOUT;
+    int outpolskip = NACCUMULATE * VDIFLEN * 4 / (2 * FFTUSE) / MIDAVG * FFTUSE;
 
-    int inidx = band * 2 * polskip + blockIdx.x * PERBLOCK * MIDAVG * FFTOUT + threadinband + 1;
-    int outidx = band * polskip / 4 + blockIdx.x * PERBLOCK * FFTUSE + threadinband;
+    // NOTE: The chunk of NACCPROCESS = 1000 will result in 62500 time samples after 512-point FFT
+    // After 4-point averaging this gives 16250 time samples.
+    // With all the chunks in place, the buffer with have 62500 time samples again, but this time averaged
+
+    // NOTE: polskip skips one polarisation in the band (2 * polskip to skip the whole band)
+    int inidx = band * 2 * inpolskip + blockIdx.x * PERBLOCK * MIDAVG * FFTOUT + threadinband + 1;
+    // NOTE: outpolskip skips all the time samples in the full buffer
+    // NOTE: outpolskip / 4 skips only the time samples relevant for the given data chunk
+    int outidx = band * outpolskip + ichunk * outpolskip / MIDAVG + blockIdx.x * PERBLOCK * FFTUSE + threadinband;
 
 
     for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
@@ -158,6 +168,71 @@ __global__ void PowerKernelOptSmall(cufftComplex *in, float *out) {
         sum = 0.0f;
         inidx += MIDAVG * FFTOUT;
         outidx += FFTUSE;
+    }
+}
+
+__global__ void PowerAvgKernel(float *in, float *out) {
+    int band = threadIdx.x / 256;
+    int threadinband = threadIdx.x % 256;
+    float sum = 0.0f;
+
+    int bandskip = NACCUMULATE * VDIFLEN * 4 / (2 * FFTUSE) / MIDAVG * FFTUSE;
+
+    // NOTE: As we average by 16 in total, initial and final averages are both 4
+    int inidx = band * bandskip + blockIdx.x * PERBLOCK * MIDAVG * FFTUSE + threadinband;
+    // NOTE: We only have to skip a quarted of the incoming band samples for the output as we average by 4
+    // NOTE: FFTUSE - threadinband - 1 to invert the frequency ordering with the top frequency first
+    int outidx = band * bandskip  / MIDAVG + blockIdx.x * PERBLOCK * FFTUSE + FFTUSE - threadinband - 1;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        for (int iavg = 0; iavg < MIDAVG; ++iavg) {
+            sum += in[inidx + iavg * FFTUSE];
+        }
+        out[outidx] = sum;
+        sum = 0.0f;
+        inidx += MIDAVG * FFTUSE;
+        outidx += FFTUSE;
+
+    }
+}
+
+__global__ PowerAvgScaleKernel(float *in, float *means, float *stdevs, unsigned char *out, int nogulps, int gulpsize, int extra, unsigned int framet, unsigned int skipchans) {
+    int band = threadIdx.x / 256;
+    int threadinband = threadIdx.x % 256;
+    float sum = 0.0f;
+    int scaled = 0;
+
+    unsigned int inidx = band * bandskip + blockIdx.x * PERBLOCK * MIDAVG * FFTUSE + threadinband;
+    unsigned int outidx;
+    unsigned int filbufidx;
+
+    // NOTE: A chunk of 4000 frames will provide 15625 time samples
+    // Each block provides 625 output time samples
+    unsigned int filtime = framet / NACCUMULATE * AVGOUTSAMPS + blockIdx.x * PERBLOCK;
+
+    for (int isamp = 0; isamp < PERBLOCK; ++isamp) {
+        for (int iavg = 0; iavg < MIDAVG; ++iavg) {
+            sum += in[inidx + iavg * FFTUSE];
+        }
+
+        filbufidx = filtime % (nogulps * gulpsize);
+        outidx = filbufidx * (2 * FFTUSE + skipchans) + band * skipchans + FFTUSE - threadIdx.x - 1;
+
+        scaled = __float2int_ru((sum - means[FFTUSE - threadIdx.x - 1]) / stdevs[FFTUSE - threadIdx.x - 1] * 32.0f + 128.0f);
+        if (scaled > 255) {
+            scaled = 255;
+        } else if (scale < 0) {
+            scaled = 0;
+        }
+
+        out[outidx] = (unsigned char)scaled;
+        if (filbufidx < extra) {
+            out[outidx + nogulps * gulpsize * (2 * FFTUSE + skipchans)] = (unsigned char)scaled;
+        }
+
+        sum = 0.0f;
+        filtime++;
+        inidx += MIDAVG * FFTUSE;
     }
 }
 

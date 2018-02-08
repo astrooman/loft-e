@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <queue>
 #include <sstream>
@@ -45,7 +46,6 @@ using std::cerr;
 using std::cout;
 using std::endl;
 using std::ostringstream;
-using std::pair;
 using std::queue;
 using std::string;
 using std::thread;
@@ -124,54 +124,73 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
         PrintSafe("Initialising the memory on pool", poolid_, "...");
     }
 
-    gpustreams_ = new cudaStream_t[nostreams_];
+    // NOTE: We make sure at the start that centre and bands vectors are of the same size
+    for (int iband = 0; iband = config_.bands.size(); ++iband) {
+        bands_.push_back(std::make_pair(config_.centres.at(iband), config_.bands.at(iband)));
+    }
+
+    // NOTE: This will sort entries in the decreasing centre frequency order
+    std::sort(bands_.begin(), bands_.end(), std::greater<std::pair<double, double>>());
+    skipchans_ = (bands_.front().first - bands.front().second / 2.0)  - (bands_.back().first + bands_.back().second) / config_.foff;
+    // NOTE: For testing purposes
+    cout << "Channels between bands: " << skipchans_ << endl;
 
     // NOTE: We have to use one stream for the GPU filterbank processing
-    // NOTE: One stream has to use two buffers side by side to cover for time spent on copying
-    rawbuffersize_ = 2 * NACCUMULATE * VDIFLEN * nobands__;
+    // NOTE: Use two buffers side by side as a safety net if one chunk is processed slower
+    // NOTE: *size variables give the number of elements and have to multiplied by the size of the element type to get size in bytes
+    // TODO: Test whether 2 is enoguh (4 or 8 might be better/safer - we go up to 16 for PAF)
+    rawbuffersize_ = 2 * NOPOLS * NACCUMULATE * VDIFLEN * nobands_;
     readyrawidx_ = new bool[rawbuffersize_];
     framenumbers_ = new unsigned int[2 * NACCUMULATE * nobands__];
-    rawgpubuffersize_ = NACCUMULATE * VDIFLEN * nobands__ * nostreams_;
+    rawgpubuffersize_ = NOPOLS * NACCUMULATE * VDIFLEN * nobands_;
     // NOTE: 4 unpacked samples per incoming byte
     // NOTE: Will have to run this is chunks of 1000 frames each to meet the memory constraints
-    unpackedsize_ = NACCPROCESS * VDIFLEN * nobands__ * nostreams_ * 4;
+    unpackedsize_ = NOPOLS * NACCPROCESS * VDIFLEN * nobands_ * 4;
 
     fftsizes_ = new int[1];
     // NOTE: Need twice as many input samples for the R2C transform
     fftsizes_[0] = 2 * FILCHANS;
-    fftbatchsize_ = unpackedsize_ / (2 * FILCHANS) / nostreams_;
+    // NOTE: Process both polarisations in one run
+    fftbatchsize_ = unpackedsize_ / (fftsizes_[0]);
     // NOTE: The output of the R2C transform is  FILCHANS + 1
-    fftsize_ = fftbatchsize_ * (FILCHANS + 1) * nostreams_;
+    fftsize_ = fftbatchsize_ * (FILCHANS + 1);
+    cudaCheckError(cudaStreamCreate(&gpustream_));
+    cufftCheckError(cufftPlanMany(&fftplan_, 1, fftsizes_, NULL, 1, FILCHANS, NULL, 1, FILCHANS, CUFFT_R2C, fftbatchsize_));
+    cufftCheckError(cufftSetStream(fftplan_, gpustream_));
 
-    fftplans_ = new cufftHandle[nostreams_];
-    for (int igstream = 0; igstream < nostreams_; igstream++) {
-        cudaCheckError(cudaStreamCreate(&gpustreams_[igstream]));
-        cufftCheckError(cufftPlanMany(&fftplans_[igstream], 1, fftsizes_, NULL, 1, FILCHANS, NULL, 1, FILCHANS, CUFFT_R2C, fftbatchsize_));
-        cufftCheckError(cufftSetStream(fftplans_[igstream], gpustreams_[igstream]));
-    }
+    // NOTE: fftbatchsize_ time samples, FILCHANS channels each, averaged by 4 in time, 4 of these in a row
+    powersize_ = (fftbatchsize_ * FILCHANS / MIDAVG) * MIDAVG;
 
-    hdinpol_ = new unsigned char*[NOPOLS];
-    hdunpacked_ = new float*[NOPOLS];
-    hdfft_ = new cufftComplex*[NOPOLS];
 
-    cudaCheckError(cudaHostAlloc((void**)&inpol_, NOPOLS * sizeof(unsigned char*), cudaHostAllocDefault));
+    // hdinpol_ = new unsigned char*[NOPOLS];
+    // hdunpacked_ = new float*[NOPOLS];
+    // hdfft_ = new cufftComplex*[NOPOLS];
 
-    for (int ipol = 0; ipol < NOPOLS; ipol++) {
-        cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], rawbuffersize_ * sizeof(unsigned char), cudaHostAllocDefault));
-        cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], rawgpubuffersize_ * sizeof(unsigned char)));
-        // NOTE: We are unpacking 2-bit number to floats - courtesy of cuFFT
-        cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));
-        cudaCheckError(cudaMalloc((void**)&hdfft_[ipol], fftsize_ * sizeof(cufftComplex)));
-    }
+    // cudaCheckError(cudaHostAlloc((void**)&inpol_, NOPOLS * sizeof(unsigned char*), cudaHostAllocDefault));
+    cudaCheckError(cudaHostAlloc((void**)hrawdata_, rawbuffersize_ * sizeof(unsigned char), cudaHostAllocDefault));
+    cudaCheckError(cudaMalloc((void**)drawdata_, rawgpubuffersize_ / 4 * sizeof(unsigned char)));
+    cudaCheckError(cudaMalloc((void**)dunpacked_, unpackedsize_ * sizeof(float)));
+    cudaCheckError(cudaMalloc((void**)dffted_, fftsize_ * sizeof(cufftComplex)));
+    // NOTE: Pre-scaled power, therefore float
+    // Scaled power saved directly to filterbank
+    cudaCheckError(cudaMalloc((void**)dpower_, powersize_ * sizeof(float));
 
-    cudaCheckError(cudaMalloc((void**)&dinpol_, NOPOLS * sizeof(unsigned char*)));
-    cudaCheckError(cudaMemcpy(dinpol_, hdinpol_, NOPOLS * sizeof(unsigned char*), cudaMemcpyHostToDevice));
+    // for (int ipol = 0; ipol < NOPOLS; ipol++) {
+    //     cudaCheckError(cudaHostAlloc((void**)&inpol_[ipol], rawbuffersize_ * sizeof(unsigned char), cudaHostAllocDefault));
+    //     cudaCheckError(cudaMalloc((void**)&hdinpol_[ipol], rawgpubuffersize_ * sizeof(unsigned char)));
+    //     // NOTE: We are unpacking 2-bit number to floats - courtesy of cuFFT
+    //     cudaCheckError(cudaMalloc((void**)&hdunpacked_[ipol], unpackedsize_ * sizeof(float)));
+    //     cudaCheckError(cudaMalloc((void**)&hdfft_[ipol], fftsize_ * sizeof(cufftComplex)));
+    // }
 
-    cudaCheckError(cudaMalloc((void**)&dunpacked_, NOPOLS * sizeof(float*)));
-    cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, NOPOLS * sizeof(float*), cudaMemcpyHostToDevice));
-
-    cudaCheckError(cudaMalloc((void**)&dfft_, NOPOLS * sizeof(cufftComplex*)));
-    cudaCheckError(cudaMemcpy(dfft_, hdfft_, NOPOLS * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
+    // cudaCheckError(cudaMalloc((void**)&dinpol_, NOPOLS * sizeof(unsigned char*)));
+    // cudaCheckError(cudaMemcpy(dinpol_, hdinpol_, NOPOLS * sizeof(unsigned char*), cudaMemcpyHostToDevice));
+    //
+    // cudaCheckError(cudaMalloc((void**)&dunpacked_, NOPOLS * sizeof(float*)));
+    // cudaCheckError(cudaMemcpy(dunpacked_, hdunpacked_, NOPOLS * sizeof(float*), cudaMemcpyHostToDevice));
+    //
+    // cudaCheckError(cudaMalloc((void**)&dfft_, NOPOLS * sizeof(cufftComplex*)));
+    // cudaCheckError(cudaMemcpy(dfft_, hdfft_, NOPOLS * sizeof(cufftComplex*), cudaMemcpyHostToDevice));
 
     scalesamples_ = config_.scaleseconds * 15625;
     dfactors_.resize(scalesamples_);
@@ -203,9 +222,7 @@ GpuPool::GpuPool(InConfig config) : avgfreq_(config.freqavg),
 
     cudaCheckError(cudaGetLastError());
 
-    for (int igstream = 0; igstream < nostreams_; igstream++) {
-        gputhreads_.push_back(thread(&GpuPool::DoGpuWork, this, igstream));
-    }
+    gputhreads_.push_back(thread(&GpuPool::DoGpuWork, this, gpustream_));
 
     cudaCheckError(cudaStreamCreate(&dedispstream_));
     gputhreads_.push_back(thread(&GpuPool::SendForDedispersion, this, dedispstream_));
@@ -310,7 +327,7 @@ GpuPool::~GpuPool(void)
 
 }
 
-void GpuPool::DoGpuWork(int stream)
+void GpuPool::DoGpuWork(cudaStream_t gpustream)
 {
     // let us hope one stream will be enough or we will have to squeeze multiple streams into single CPU core
     cpu_set_t cpuset;
@@ -320,11 +337,11 @@ void GpuPool::DoGpuWork(int stream)
     int retaff = pthread_setaffinity_np(gputhreads_[stream].native_handle(), sizeof(cpu_set_t), &cpuset);
 
     if (retaff != 0) {
-        PrintSafe("Error setting thread affinity for the GPU processing, stream", stream, "on pool", poolid_);
+        PrintSafe("Error setting thread affinity for the GPU processin on pool", poolid_);
     }
 
     if (verbose_) {
-        PrintSafe("Starting worker", gpuid_, ":", stream, "on CPU ", sched_getcpu());
+        PrintSafe("Starting worker", gpuid_, "on CPU ", sched_getcpu());
     }
 
     cudaCheckError(cudaSetDevice(gpuid_));
@@ -398,47 +415,53 @@ void GpuPool::DoGpuWork(int stream)
             frametime.startepoch = starttime_.startepoch;
             frametime.startsecond = starttime_.startsecond;
             frametime.framet = framenumbers_[bufferidx / nostreams_ * NACCUMULATE];
-            //cout << frametime.framet << endl;
-            // TODO: Simplify this - we will always get two polarisations
-            for (int ipol = 0; ipol < NOPOLS; ipol++) {
-                cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * rawgpubuffersize_ / nostreams_, inpol_[ipol] + bufferidx * rawgpubuffersize_ / nostreams_, NACCUMULATE * VDIFLEN * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustreams_[stream]));
-            }
 
-            for (int ipol = 0; ipol < NOPOLS; ++ipol) {
-                cudaCheckError(cudaMemcpyAsync(preunpacked[ipol], inpol[ipol] + bufferidx * ))
-            }
+            // cout << frametime.framet << endl;
+            // for (int ipol = 0; ipol < NOPOLS; ipol++) {
+            //     cudaCheckError(cudaMemcpyAsync(hdinpol_[ipol] + stream * rawgpubuffersize_ / nostreams_, inpol_[ipol] + bufferidx * rawgpubuffersize_ / nostreams_, NACCUMULATE * VDIFLEN * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustream_));
+            // }
+            //
+            // for (int ipol = 0; ipol < NOPOLS; ++ipol) {
+            //     cudaCheckError(cudaMemcpyAsync(preunpacked[ipol], inpol[ipol] + bufferidx * ))
+            // }
+            //
+            // for (int iband = 0; iband < nobands_; ++iband) {
+            //     std::copy(rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * iband, rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * (iband + 1), preunpacked + NACCUMULATE * VDIFLEN * NOPOLS * iband);
+            // }
 
-            // TODO: Redesign the receive buffers
+            cudaCheckError(cudaMemcpyAsync(drawdata_, hrawdata_ + bufferidx * rawgpubuffersize_, rawgpubuffersize_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustream_));
 
-            for (int iband = 0; iband < nobands_; ++iband) {
-                std::copy(rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * iband, rawdata_ + NACCUMULATE * VDIFLEN * NOPOLS * (iband + 1), preunpacked + NACCUMULATE * VDIFLEN * NOPOLS * iband);
-            }
-
+            const unsigned int bandskip = NOPOLS * NACCUMULATE * VDIFLEN;
+            const unsigned int smallbandskip = NOPOLS * NACCPROCESS * VDIFLEN;
+            const unsigned int polskip = NACCUMULATE * VDIFLEN;
+            const unsigned int smallpolskip = NACCPROCESS * VDIFLEN;
+            const unsigned int chunkskip = NACCPROCESS * VDIFLEN;
 
             for (int ichunk = 0; ichunk < (NACCUMULATE / NACCPROCESS); ++ichunk) {
-                UnpackKernelOptSmall<<<50, 1024, 0, gpustreams_[0]>>>(dinpol_, dunpacked_, NACCPROCESS * VDIFLEN * NOPOLS * nobands_);
+                for (int iband = 0; iband < bands_.size(), ++iband) {
+                    cudaCheckError(cudaMemcpyAsync(drawdata_ + iband * smallbandskip, hrawdata_ + bufferidx * rawgpubuffersize_ + iband * bandskip + ichunk * chunkskip, chunkskip * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustream_));
+                    cudaCheckError(cudaMemcpyAsync(drawdata_ + iband * smallbandskip + smallpolskip, hrawdata_ + bufferidx * rawgpubuffersize_ + iband * bandskip + polskip + ichunk * chunkskip, chunkskip * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustream_));
+                }
+
+                cudaCheckError(cudaMemcpyAsync(drawdata_, hrawdata_ + bufferidx * rawgpubuffersize_, rawgpubuffersize_ * sizeof(unsigned char), cudaMemcpyHostToDevice, gpustream_));
+                UnpackKernelSmall<<<nobands_ * 25, 1024, 0, gpustream_>>>(drawdata_, dunpacked_, NACCPROCESS * VDIFLEN * NOPOLS * nobands_);
                 cufftCheckError(cufftExecR2C(fftplan_, dunpacked_, dffted_));
-                PowerKernelOptSmall<<<25, 512, 0>>>
-            }
-
-
-            for (int ipol = 0; ipol < NOPOLS; ipol++) {
-                cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
+                PowerKernelSmall<<<25, nobands_ * 256, 0, gpustream_>>>(dffted_, dpower_, ichunk);
             }
 
             if (scaled_) {
-                PowerScaleKernelOpt<<<25, FILCHANS, 0, gpustreams_[stream]>>>(dfft_, pdmeans_, pdstdevs_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
+                PowerAvgScaleKernel<<<25, nobands_ * 256, 0, gpustream_>>>(dpower, pdmeans_, pdstdevs_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
                 filbuffer_ -> Update(frametime);
-                cudaStreamSynchronize(gpustreams_[stream]);
+                cudaStreamSynchronize(gpustream_);
                 cudaCheckError(cudaGetLastError());
             } else {
-                PowerKernelOpt<<<25, FILCHANS, 0, gpustreams_[stream]>>>(dfft_, dscalepower);
-                cudaStreamSynchronize(gpustreams_[stream]);
+                PowerAvgKernel<<<25, nobands_ * 256, 0, gpustream_>>>(dpower_, dscalepower);
+                cudaStreamSynchronize(gpustream_);
                 cudaCheckError(cudaGetLastError());
-                GetScaleFactorsKernel<<<1, 256, 0, gpustreams_[stream]>>>(dscalepower, pdmeans_, pdstdevs_, pdfactors_, alreadyscaled);
-                cudaStreamSynchronize(gpustreams_[stream]);
+                // TODO: Still need to fix the GetScaleFactorsKernel
+                GetScaleFactorsKernel<<<1, nobands_, 0, gpustream_>>>(dscalepower, pdmeans_, pdstdevs_, pdfactors_, alreadyscaled);
+                cudaStreamSynchronize(gpustream_);
                 cudaCheckError(cudaGetLastError());
-                // NOTE: This is not thread safe
                 alreadyscaled += 15625;
                 if (alreadyscaled >= scalesamples_) {
                     cout << "Scaling factors have been obtained" << endl;
@@ -446,6 +469,32 @@ void GpuPool::DoGpuWork(int stream)
                     scaled_ = true;
                 }
             }
+
+            // for (int ipol = 0; ipol < NOPOLS; ipol++) {
+            //     cufftCheckError(cufftExecR2C(fftplans_[stream], hdunpacked_[ipol], hdfft_[ipol]));
+            // }
+            //
+            // if (scaled_) {
+            //     PowerScaleKernelOpt<<<25, FILCHANS, 0, gpustream_>>>(dfft_, pdmeans_, pdstdevs_, filbuffer_ -> GetFilPointer(), nogulps_, dedispgulpsamples_, dedispextrasamples_, frametime.framet);
+            //     filbuffer_ -> Update(frametime);
+            //     cudaStreamSynchronize(gpustream_);
+            //     cudaCheckError(cudaGetLastError());
+            // } else {
+            //     PowerKernelOpt<<<25, FILCHANS, 0, gpustream_>>>(dfft_, dscalepower);
+            //     cudaStreamSynchronize(gpustream_);
+            //     cudaCheckError(cudaGetLastError());
+            //     GetScaleFactorsKernel<<<1, 256, 0, gpustream_>>>(dscalepower, pdmeans_, pdstdevs_, pdfactors_, alreadyscaled);
+            //     cudaStreamSynchronize(gpustream_);
+            //     cudaCheckError(cudaGetLastError());
+            //     // NOTE: This is not thread safe
+            //     alreadyscaled += 15625;
+            //     if (alreadyscaled >= scalesamples_) {
+            //         cout << "Scaling factors have been obtained" << endl;
+            //         cout.flush();
+            //         scaled_ = true;
+            //     }
+            // }
+
         } else {
             std::this_thread::yield();
         }
@@ -515,7 +564,7 @@ void GpuPool::HandleSignal(int signum)
     working_ = false;
 }
 
-void GpuPool::ReceiveData(int portid, int recport)
+void GpuPool::ReceiveData(int bandid, int recport)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -524,11 +573,11 @@ void GpuPool::ReceiveData(int portid, int recport)
     // TODO: pass the thread ID properly
     int retaff = pthread_setaffinity_np(receivethreads_[portid].native_handle(), sizeof(cpu_set_t), &cpuset);
     if (retaff != 0) {
-        PrintSafe("Error setting thread affinity for receive thread on port", recport, "on pool", poolid_);
+        PrintSafe("Error setting thread affinity for receive thread on port", recport);
     }
 
     if (verbose_) {
-        PrintSafe("Receive thread on port", recport, "running on CPU", sched_getcpu());
+        PrintSafe("Receive thread on port", recport, "for band", bands_.at(bandid).first, "MHz, running on CPU", sched_getcpu());
     }
 
     sockaddr_storage theiraddr;
@@ -536,16 +585,17 @@ void GpuPool::ReceiveData(int portid, int recport)
     socklen_t addrlen;
     memset(&addrlen, 0, sizeof(addrlen));
 
-    const int pack_per_worker_buf = packperbuf_ / nostreams_;
+    const unsigned int bandskip = NOPOLS * NACCUMULATE * VDIFLEN;
+    const unsigned int polskip = NACCUMULATE * VDIFLEN;
     int numbytes{0};
     short bufidx{0};
-    // this will always be an integer
     unsigned int frameno{0};
     int refsecond{0};
-    // thread ID is used to distinguish between polarisations
+    // NOTE: Thread ID is used to distinguish between polarisations
     int threadid{0};
     int packcount{0};
 
+    // TODO: Fix the waiting. Still wait for frame 0 - second boundary, but use similar waiting mechanism to one in PAFINDER
     // TODO: be careful which port waits
     if (recport == ports_[0]) {
         unsigned char *tempbuf = recbufs_[0];
@@ -591,7 +641,8 @@ void GpuPool::ReceiveData(int portid, int recport)
         //cout.flush();
         framenumbers_[bufidx] = frameno;
         // TODO: Implement a consumer-producer model, similar to the PAF solution
-	    std::copy(recbufs_[portid] + HEADLEN, recbufs_[portid] + HEADLEN + VDIFLEN, inpol_[threadid] + VDIFLEN * bufidx);
+        // TODO: This might not be correct for the case of 2 buffers side by side
+	    std::copy(recbufs_[portid] + HEADLEN, recbufs_[portid] + HEADLEN + VDIFLEN, rawdata_ + bandid * bandskip + threadid * polskip + VDIFLEN * bufidx);
         if ((threadid == 1) && (frameno > 10))
             readyrawidx_[bufidx] = true;
 

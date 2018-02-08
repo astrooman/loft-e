@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <cuda.h>
@@ -25,6 +26,7 @@ class GpuPool
 
         std::vector<int> ports_;
         std::string strip_;
+        std<vector<std::pair>> bands_;
         std::vector<std::thread> gputhreads_;
         std::vector<std::thread> receivethreads_;
 

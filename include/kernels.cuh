@@ -19,6 +19,12 @@ __global__ void PowerScaleKernelOpt(cufftComplex **in, float *means, float *stde
 
 __global__ void GetScaleFactorsKernel(float *in, float *means, float *stdevs, float *factors, size_t processed);
 
+__global__ void UnpackKernelSmall(unsigned char *in, float *out, size_t samples);
+
+__global__ void PowerKernelSmall(cufftComplex *in, float *out, int ichunk);
+
+__global__ void PowerAvgKernel(float *in, float *out);
+
 template<class InType, class OutType>
 __global__ void TransposeKernel(InType* __restrict__ in, OutType* __restrict__ out, unsigned int nchans, unsigned int ntimes) {
     // very horrible implementation or matrix transpose
